@@ -1,20 +1,26 @@
-const CACHE_NAME = 'geocam-pro-v2';
+const CACHE_NAME = 'geocam-pro-v4';
 const ASSETS = [
   './',
   './index.html',
-  './tailwind.js',
-  './css/all.min.css',
-  './leaflet.css',
-  './leaflet.js',
-  './manifest.json'
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
+  'https://cdn.tailwindcss.com',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+  'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js'
 ];
 
+// Instalación: Guarda todo en la memoria de la tablet (la primera vez en la oficina)
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(ASSETS);
+    })
   );
 });
 
+// Activación: Limpia cachés antiguas si actualizas el código en el futuro
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) => Promise.all(
@@ -23,6 +29,7 @@ self.addEventListener('activate', (e) => {
   );
 });
 
+// Intercepción: Si no hay internet, sirve los archivos desde la memoria local
 self.addEventListener('fetch', (e) => {
   e.respondWith(
     caches.match(e.request).then((cachedResponse) => {
