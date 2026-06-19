@@ -1,6 +1,6 @@
 {
   "name": "GeoCam",
-  "short_name": "GeoCamPro",
+  "short_name": "GeoCam",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#020617",
