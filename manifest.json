@@ -1,5 +1,5 @@
 {
-  "name": "GeoCam Pro - Terminal de Inspección",
+  "name": "GeoCam",
   "short_name": "GeoCamPro",
   "start_url": "./index.html",
   "display": "standalone",
