@@ -1,4 +1,4 @@
-const CACHE_NAME = 'geocam-pro-v5';
+const CACHE_NAME = 'geocam-pro-v6';
 const ASSETS = [
   './',
   './index.html',
