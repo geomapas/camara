@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GeoCam Pro - Terminal de Inspección</title>
     <link rel="manifest" href="./manifest.json">
-    <script src="./tailwind.js"></script>
-    <link href="./css/all.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="./leaflet.css" />
-    <script src="./leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
     <style>
         :root { --panel-bg: #0f172a; --accent: #3b82f6; }
         body { background-color: #020617; color: #f8fafc; font-family: system-ui; height: 100vh; overflow: hidden; display: flex; flex-direction: row; margin: 0; }
@@ -60,9 +60,6 @@
                 <button onclick="conectarNuevoGPS()" class="w-full bg-blue-600 hover:bg-blue-700 p-2 rounded text-xs font-bold text-white">
                     VINCULAR NUEVO PUERTO
                 </button>
-                <div class="text-[10px] text-slate-400 italic">
-                    Nota: Una vez vinculado, la app recordará este puerto en el panel lateral para reconexiones rápidas.
-                </div>
             </div>
 
             <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
@@ -189,6 +186,7 @@
     <canvas id="canvas-export" style="display:none"></canvas>
 
     <script>
+        // Registro automático del Service Worker
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js'); });
         }
@@ -262,14 +260,13 @@
             if (config.lastZoom) { currentZoom = config.lastZoom; document.getElementById('cam-zoom').value = currentZoom; }
         }
 
-        // LÓGICA DE MEMORIA DEL PUERTO SERIE (WEB SERIAL)
+        // LÓGICA DE MEMORIA DEL PUERTO SERIE
         async function comprobarPuertosExistentes() {
             if (!("serial" in navigator)) return;
             const ports = await navigator.serial.getPorts();
             const btnEl = document.getElementById('btn-serial-gps');
             
             if (ports.length > 0) {
-                // Almacenamos internamente la referencia del último puerto autorizado
                 serialPort = ports[0];
                 btnEl.innerText = "AUTOCONECTAR";
                 btnEl.className = "bg-green-600 hover:bg-green-700 text-[10px] font-bold py-1.5 px-2 rounded text-white w-full truncate shadow-md";
@@ -278,7 +275,6 @@
 
         async function inicializarFlujoGPS() {
             if (serialPort && document.getElementById('btn-serial-gps').innerText === "AUTOCONECTAR") {
-                // El navegador ya tiene el puerto guardado, lo abre de forma directa tras el clic
                 await abrirPuertoSerial(serialPort);
             } else if (document.getElementById('btn-serial-gps').innerText === "DESCONECTAR") {
                 desactivarGPS();
@@ -290,13 +286,10 @@
         async function conectarNuevoGPS() {
             if (!("serial" in navigator)) { alert("Tu navegador no soporta Web Serial."); return; }
             try {
-                // Abre el diálogo nativo para autorizar un nuevo puerto COM
                 const port = await navigator.serial.requestPort();
                 serialPort = port;
                 await abrirPuertoSerial(port);
-            } catch (err) {
-                console.error("Acceso al puerto serie cancelado:", err);
-            }
+            } catch (err) { console.error("Acceso al puerto serie cancelado:", err); }
         }
 
         async function abrirPuertoSerial(port) {
@@ -318,7 +311,7 @@
                 keepReading = true;
                 const decoder = new TextDecoderStream();
                 port.readable.pipeTo(decoder.writable);
-                serialReader = decoder.readable.getReader();
+                serialReader = decoder.writable.getReader();
 
                 let bufferNMEA = "";
                 while (keepReading) {
@@ -351,11 +344,8 @@
                 if (serialReader) { await serialReader.cancel(); serialReader = null; }
                 if (serialPort) { await serialPort.close(); }
             } catch(e) {}
-            
             statusEl.innerText = "DESCONECTADO";
             statusEl.className = "text-[10px] font-bold text-red-500";
-            
-            // Evaluamos si mantenemos el puerto en caché para el botón
             await comprobarPuertosExistentes();
         }
 
@@ -426,9 +416,10 @@
             }
         }
 
+        // MAPA CONFIGURADO CON RUTAS ONLINE COMPATIBLES CON SERVICE WORKER CACHE
         function initMap() {
             map = L.map('mini-map', { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false }).setView([0,0], 16);
-            tileLayer = L.tileLayer('./tiles/{z}/{x}/{y}.png', { crossOrigin: true }).addTo(map);
+            tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { crossOrigin: true }).addTo(map);
         }
 
         function initSensors() {
@@ -470,7 +461,7 @@
             if (map) {
                 map.setZoom(mapZoom);
                 setTimeout(() => map.invalidateSize(), 100);
-                tileLayer.setUrl(mapType === 'satellite' ? './tiles_satellite/{z}/{x}/{y}.png' : './tiles/{z}/{x}/{y}.png');
+                tileLayer.setUrl(mapType === 'satellite' ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
             }
         }
 
@@ -593,7 +584,7 @@
             await initCamera();
             initMap();
             initSensors();
-            await comprobarPuertosExistentes(); // Escanea el historial en busca de puertos ya aprobados
+            await comprobarPuertosExistentes();
             setInterval(updateClock, 1000);
             updateUI();
         };
