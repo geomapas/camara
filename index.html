@@ -248,6 +248,7 @@
             statusEl.innerText = "BUSCANDO...";
             statusEl.className = "text-[10px] font-bold text-orange-400 uppercase mt-0.5";
 
+            // CORRECCIÓN DE PRECISIÓN EXTREMA: Forzamos al sensor físico a activarse sin caché previa
             watchGpsInternoId = navigator.geolocation.watchPosition(
                 (position) => {
                     lastLat = position.coords.latitude;
@@ -263,7 +264,11 @@
                     statusEl.innerText = "ERROR GPS";
                     statusEl.className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
                 },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                { 
+                    enableHighAccuracy: true,  // Exige la antena GPS de alta precisión (satelital)
+                    timeout: 30000,            // Espera hasta 30 segundos para triangular la señal real
+                    maximumAge: 0              // Ignora posiciones cacheadas (evita saltos de 50 metros)
+                }
             );
         }
 
@@ -334,32 +339,20 @@
             if (isCameraPowered) { await encenderOApagarHardwareCamara(true); }
         }
 
-        // CONTROL DE VISIBILIDAD DE HARDWARE CRÍTICO (AHORRO ABSOLUTO DE BATERÍA)
         document.addEventListener("visibilitychange", async () => {
             if (document.hidden) {
                 appEstaVisible = false;
-                
-                // 1. Apagado radical del hardware de la Cámara
                 if (isCameraPowered && videoTrack) {
                     if (videoTrack) { videoTrack.stop(); videoTrack = null; }
                     document.getElementById('video').srcObject = null;
                 }
-                
-                // 2. Desconexión radical del sensor GPS de la tablet
-                desdesactivarGpsInterno();
-                
+                desactivarGpsInterno();
             } else {
                 appEstaVisible = true;
-                
-                // 1. Reactivación del GPS nativo
                 activarGpsInterno();
-                
-                // 2. Reposicionamiento forzado inmediato del mapa en pantalla
                 if (lastLat !== 0 && map) {
                     map.setView([lastLat, lastLon]);
                 }
-                
-                // 3. Reactivación del hardware de la Cámara
                 if (isCameraPowered) {
                     await encenderOApagarHardwareCamara(true);
                 }
