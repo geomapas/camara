@@ -48,24 +48,6 @@
         
         <div class="space-y-6">
             <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
-                <label class="text-xs font-bold text-slate-500 uppercase">Puerto COM (GPS Bluetooth)</label>
-                <div class="space-y-2">
-                    <span class="text-xs text-slate-400">VELOCIDAD (BAUDRATE)</span>
-                    <select id="cfg-gps-baud" onchange="saveConfig();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
-                        <option value="9600">9600 bps (Estándar)</option>
-                        <option value="4800">4800 bps</option>
-                        <option value="115200">115200 bps</option>
-                    </select>
-                </div>
-                <button onclick="conectarNuevoGPS()" class="w-full bg-blue-600 hover:bg-blue-700 p-2 rounded text-xs font-bold text-white">
-                    VINCULAR NUEVO PUERTO
-                </button>
-                <div class="text-[10px] text-slate-400 italic">
-                    Nota: Si no hay un puerto COM conectado, la aplicación utilizará automáticamente el GPS interno de la tablet.
-                </div>
-            </div>
-
-            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
                 <label class="text-xs font-bold text-slate-500 uppercase">Hardware de Video</label>
                 <div class="space-y-2">
                     <span class="text-xs text-slate-400">SELECCIONAR CÁMARA</span>
@@ -163,10 +145,7 @@
 
     <div class="control-side-bar">
         <div class="flex flex-col items-center gap-1 mt-2 w-full px-2 text-center">
-            <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Origen GPS</span>
-            <button id="btn-serial-gps" onclick="inicializarFlujoGPS()" class="bg-blue-600 hover:bg-blue-700 text-[10px] font-bold py-1.5 px-2 rounded text-white w-full truncate shadow-md">
-                CONECTAR
-            </button>
+            <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Estado GPS</span>
             <div id="gps-status" class="text-[10px] font-bold text-orange-400 uppercase mt-0.5">BUSCANDO...</div>
             <div id="compass-val" class="text-sm font-mono text-white mt-1">---°</div>
         </div>
@@ -199,14 +178,7 @@
         let currentZoom = 1;
         let isCameraPowered = true;
         
-        let serialPort = null;
-        let serialReader = null;
-        let keepReading = false;
-        
         let watchGpsInternoId = null;
-        let usandoGpsExterno = false;
-        
-        // Nueva bandera para pausar el renderizado visual del mapa si la app no está visible
         let appEstaVisible = true;
 
         function toggleConfig() { document.getElementById('config-panel').classList.toggle('open'); }
@@ -245,7 +217,6 @@
                 mapZoom: document.getElementById('cfg-map-zoom').value,
                 textColor: document.getElementById('cfg-text-color').value,
                 textSize: document.getElementById('cfg-text-size').value,
-                gpsBaud: document.getElementById('cfg-gps-baud').value,
                 lastZoom: currentZoom
             };
             localStorage.setItem('geocam_config', JSON.stringify(config));
@@ -264,34 +235,33 @@
             if (config.mapZoom) document.getElementById('cfg-map-zoom').value = config.mapZoom;
             if (config.textColor) document.getElementById('cfg-text-color').value = config.textColor;
             if (config.textSize) document.getElementById('cfg-text-size').value = config.textSize;
-            if (config.gpsBaud) document.getElementById('cfg-gps-baud').value = config.gpsBaud;
             if (config.lastZoom) { currentZoom = config.lastZoom; document.getElementById('cam-zoom').value = currentZoom; }
         }
 
         function activarGpsInterno() {
-            if (usandoGpsExterno) return;
             if (!("geolocation" in navigator)) {
-                document.getElementById('gps-status').innerText = "SIN GPS LOCAL";
+                document.getElementById('gps-status').innerText = "SIN GPS";
                 document.getElementById('gps-status').className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
                 return;
             }
             const statusEl = document.getElementById('gps-status');
-            statusEl.innerText = "GPS INTERNO";
-            statusEl.className = "text-[10px] font-bold text-blue-400 uppercase mt-0.5";
+            statusEl.innerText = "BUSCANDO...";
+            statusEl.className = "text-[10px] font-bold text-orange-400 uppercase mt-0.5";
 
             watchGpsInternoId = navigator.geolocation.watchPosition(
                 (position) => {
-                    if (usandoGpsExterno) return;
                     lastLat = position.coords.latitude;
                     lastLon = position.coords.longitude;
+                    
+                    statusEl.innerText = "GPS ACTIVO";
+                    statusEl.className = "text-[10px] font-bold text-green-500 uppercase mt-0.5";
+                    
                     actualizarGeometriaLocal();
                 },
                 (error) => {
                     console.error("Error leyendo GPS interno:", error);
-                    if (!usandoGpsExterno) {
-                        statusEl.innerText = "ERR GPS INT";
-                        statusEl.className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
-                    }
+                    statusEl.innerText = "ERROR GPS";
+                    statusEl.className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
@@ -301,131 +271,10 @@
             if (watchGpsInternoId !== null) {
                 navigator.geolocation.clearWatch(watchGpsInternoId);
                 watchGpsInternoId = null;
-            }
-        }
-
-        async function comprobarPuertosExistentes() {
-            if (!("serial" in navigator)) { activarGpsInterno(); return; }
-            const ports = await navigator.serial.getPorts();
-            const btnEl = document.getElementById('btn-serial-gps');
-            
-            if (ports.length > 0) {
-                serialPort = ports[0];
-                btnEl.innerText = "AUTOCONECTAR";
-                btnEl.className = "bg-green-600 hover:bg-green-700 text-[10px] font-bold py-1.5 px-2 rounded text-white w-full truncate shadow-md";
-                activarGpsInterno();
-            } else {
-                activarGpsInterno();
-            }
-        }
-
-        async function inicializarFlujoGPS() {
-            if (serialPort && document.getElementById('btn-serial-gps').innerText === "AUTOCONECTAR") {
-                await abrirPuertoSerial(serialPort);
-            } else if (document.getElementById('btn-serial-gps').innerText === "DESCONECTAR") {
-                await desactivarGPS();
-            } else {
-                await conectarNuevoGPS();
-            }
-        }
-
-        async function conectarNuevoGPS() {
-            if (!("serial" in navigator)) { alert("Tu navegador no soporta Web Serial."); return; }
-            try {
-                const port = await navigator.serial.requestPort();
-                serialPort = port;
-                await abrirPuertoSerial(port);
-            } catch (err) { console.error("Acceso al puerto serie cancelado:", err); }
-        }
-
-        async function abrirPuertoSerial(port) {
-            const statusEl = document.getElementById('gps-status');
-            const btnEl = document.getElementById('btn-serial-gps');
-            const baud = parseInt(document.getElementById('cfg-gps-baud').value) || 9600;
-
-            try {
-                statusEl.innerText = "CONECTANDO";
-                statusEl.className = "text-[10px] font-bold text-orange-400 uppercase mt-0.5";
-
-                await port.open({ baudRate: baud });
-                usandoGpsExterno = true;
-                desactivarGpsInterno();
-
-                statusEl.innerText = "CONECTADO EXT";
-                statusEl.className = "text-[10px] font-bold text-green-500 uppercase mt-0.5";
-                btnEl.innerText = "DESCONECTAR";
-                btnEl.className = "bg-red-600 hover:bg-red-700 text-[10px] font-bold py-1.5 px-2 rounded text-white w-full truncate shadow-md";
-
-                keepReading = true;
-                const decoder = new TextDecoderStream();
-                port.readable.pipeTo(decoder.writable);
-                serialReader = decoder.readable.getReader();
-
-                let bufferNMEA = "";
-                while (keepReading) {
-                    const { value, done } = await serialReader.read();
-                    if (done || !keepReading) break;
-                    if (value) {
-                        bufferNMEA += value;
-                        let lineas = bufferNMEA.split("\r\n");
-                        bufferNMEA = lineas.pop();
-                        for (let linea of lineas) {
-                            if (linea.includes("RMC") || linea.includes("GGA")) { procesarNMEA(linea); }
-                        }
-                    }
-                }
-            } catch (err) {
-                console.error("Error al abrir el puerto:", err);
-                statusEl.innerText = "ERROR PUERTO";
-                statusEl.className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
-                await desactivarGPS();
-            }
-        }
-
-        async function desactivarGPS() {
-            keepReading = false;
-            usandoGpsExterno = false;
-            const statusEl = document.getElementById('gps-status');
-            const btnEl = document.getElementById('btn-serial-gps');
-            try {
-                if (serialReader) { await serialReader.cancel(); serialReader = null; }
-                if (serialPort) { await serialPort.close(); }
-            } catch(e) {}
-            btnEl.innerText = "CONECTAR";
-            btnEl.className = "bg-blue-600 hover:bg-blue-700 text-[10px] font-bold py-1.5 px-2 rounded text-white w-full truncate shadow-md";
-            await comprobarPuertosExistentes();
-        }
-
-        function procesarNMEA(sentence) {
-            if (!usandoGpsExterno) return;
-            const tokens = sentence.split(",");
-            if (tokens.length < 6) return;
-
-            if (tokens[0].includes("RMC") && tokens[2] === "A") {
-                let latRaw = parseFloat(tokens[3]);
-                if (!isNaN(latRaw)) {
-                    let latDeg = Math.floor(latRaw / 100); let latMin = latRaw - (latDeg * 100);
-                    lastLat = latDeg + (latMin / 60); if (tokens[4] === "S") lastLat = -lastLat;
-                }
-                let lonRaw = parseFloat(tokens[5]);
-                if (!isNaN(lonRaw)) {
-                    let lonDeg = Math.floor(lonRaw / 100); let lonMin = lonRaw - (lonDeg * 100);
-                    lastLon = lonDeg + (lonMin / 60); if (tokens[6] === "W") lastLon = -lastLon;
-                }
-                actualizarGeometriaLocal();
-            } 
-            else if (tokens[0].includes("GGA") && parseInt(tokens[6]) > 0) {
-                let latRaw = parseFloat(tokens[2]);
-                if (!isNaN(latRaw)) {
-                    let latDeg = Math.floor(latRaw / 100); let latMin = latRaw - (latDeg * 100);
-                    lastLat = latDeg + (latMin / 60); if (tokens[3] === "S") lastLat = -lastLat;
-                }
-                let lonRaw = parseFloat(tokens[4]);
-                if (!isNaN(lonRaw)) {
-                    let lonDeg = Math.floor(lonRaw / 100); let lonMin = lonRaw - (lonDeg * 100);
-                    lastLon = lonDeg + (lonMin / 60); if (tokens[5] === "W") lastLon = -lastLon;
-                }
-                actualizarGeometriaLocal();
+                
+                const statusEl = document.getElementById('gps-status');
+                statusEl.innerText = "GPS PAUSADO";
+                statusEl.className = "text-[10px] font-bold text-slate-500 uppercase mt-0.5";
             }
         }
 
@@ -433,11 +282,9 @@
             const utm = getUTM(lastLat, lastLon);
             lastUTM = `${utm.z} ${utm.e} ${utm.n}`;
             
-            // Las coordenadas de texto se actualizan SIEMPRE (gasto insignificante, vital para la foto)
             document.getElementById('wm-geo').innerText = `LAT: ${lastLat.toFixed(6)} LON: ${lastLon.toFixed(6)}`;
             updateOrientationVisuals();
             
-            // CORRECCIÓN INTELIGENTE: El mapa solo se mueve si la aplicación está maximizada en pantalla
             if (map && appEstaVisible) {
                 map.setView([lastLat, lastLon]);
             }
@@ -487,19 +334,32 @@
             if (isCameraPowered) { await encenderOApagarHardwareCamara(true); }
         }
 
-        // CONTROL DE VISIBILIDAD OPTIMIZADO (CAMARA + MAPA)
+        // CONTROL DE VISIBILIDAD DE HARDWARE CRÍTICO (AHORRO ABSOLUTO DE BATERÍA)
         document.addEventListener("visibilitychange", async () => {
             if (document.hidden) {
-                appEstaVisible = false; // Bloquea los renders de Leaflet en segundo plano
+                appEstaVisible = false;
+                
+                // 1. Apagado radical del hardware de la Cámara
                 if (isCameraPowered && videoTrack) {
                     if (videoTrack) { videoTrack.stop(); videoTrack = null; }
                     document.getElementById('video').srcObject = null;
                 }
+                
+                // 2. Desconexión radical del sensor GPS de la tablet
+                desdesactivarGpsInterno();
+                
             } else {
-                appEstaVisible = true; // Libera el mapa para volver a pintar posiciones
+                appEstaVisible = true;
+                
+                // 1. Reactivación del GPS nativo
+                activarGpsInterno();
+                
+                // 2. Reposicionamiento forzado inmediato del mapa en pantalla
                 if (lastLat !== 0 && map) {
-                    map.setView([lastLat, lastLon]); // Fuerza al mapa a teletransportarse al punto real actual
+                    map.setView([lastLat, lastLon]);
                 }
+                
+                // 3. Reactivación del hardware de la Cámara
                 if (isCameraPowered) {
                     await encenderOApagarHardwareCamara(true);
                 }
@@ -673,7 +533,7 @@
             await initCamera();
             initMap();
             initSensors();
-            await comprobarPuertosExistentes();
+            activarGpsInterno();
             setInterval(updateClock, 1000);
             updateUI();
         };
