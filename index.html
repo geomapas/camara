@@ -114,7 +114,7 @@
                     </button>
                 </div>
                 <div id="folder-display" class="bg-slate-950 p-3 rounded-lg border border-slate-800 mt-2">
-                    <p id="folder-path" class="text-[11px] text-blue-300 italic break-all font-mono leading-tight">No vinculado</p>
+                    <p id="folder-path" class="text-[11px] text-blue-300 italic break-all font-mono leading-tight">Cargando vinculación...</p>
                 </div>
             </div>
         </div>
@@ -183,6 +183,62 @@
 
         function toggleConfig() { document.getElementById('config-panel').classList.toggle('open'); }
 
+        // --- SISTEMA DE PERSISTENCIA INDEXEDDB PARA LA CARPETA ---
+        function getDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open("GeoCamFolderDB", 1);
+                request.onupgradeneeded = (e) => {
+                    e.target.result.createObjectStore("handles");
+                };
+                request.onsuccess = (e) => resolve(e.target.result);
+                request.onerror = (e) => reject(e.target.error);
+            });
+        }
+
+        async function storeFolderHandle(handle) {
+            try {
+                const db = await getDB();
+                const tx = db.transaction("handles", "readwrite");
+                tx.objectStore("handles").put(handle, "targetFolder");
+                await tx.complete;
+            } catch (err) { console.error("Error guardando handle de carpeta:", err); }
+        }
+
+        async function loadFolderHandle() {
+            try {
+                const db = await getDB();
+                return new Promise((resolve) => {
+                    const tx = db.transaction("handles", "readonly");
+                    const req = tx.objectStore("handles").get("targetFolder");
+                    req.onsuccess = async () => {
+                        const handle = req.result;
+                        if (handle) {
+                            // Verifica si el navegador nos da permiso de re-enganche permanente
+                            const opts = { mode: 'readwrite' };
+                            if ((await handle.queryPermission(opts)) === 'granted') {
+                                resolve(handle);
+                            } else if ((await handle.requestPermission(opts)) === 'granted') {
+                                resolve(handle);
+                            } else { resolve(null); }
+                        } else { resolve(null); }
+                    };
+                    req.onerror = () => resolve(null);
+                });
+            } catch (err) {
+                console.error("Error cargando handle de carpeta:", err);
+                return null;
+            }
+        }
+
+        async function removeFolderHandle() {
+            try {
+                const db = await getDB();
+                const tx = db.transaction("handles", "readwrite");
+                tx.objectStore("handles").delete("targetFolder");
+            } catch (err) {}
+        }
+        // --------------------------------------------------------
+
         async function listCameras() {
             const select = document.getElementById('cfg-camera-device');
             try {
@@ -224,7 +280,10 @@
 
         function loadConfig() {
             const saved = localStorage.getItem('geocam_config');
-            if (!saved) return;
+            if (!saved) {
+                document.getElementById('folder-path').innerText = "No vinculado";
+                return;
+            }
             const config = JSON.parse(saved);
             if (config.resolution) document.getElementById('cfg-resolution').value = config.resolution;
             if (config.showMap !== undefined) document.getElementById('cfg-show-map').checked = config.showMap;
@@ -248,15 +307,12 @@
             statusEl.innerText = "BUSCANDO...";
             statusEl.className = "text-[10px] font-bold text-orange-400 uppercase mt-0.5";
 
-            // CORRECCIÓN DE PRECISIÓN EXTREMA: Forzamos al sensor físico a activarse sin caché previa
             watchGpsInternoId = navigator.geolocation.watchPosition(
                 (position) => {
                     lastLat = position.coords.latitude;
                     lastLon = position.coords.longitude;
-                    
                     statusEl.innerText = "GPS ACTIVO";
                     statusEl.className = "text-[10px] font-bold text-green-500 uppercase mt-0.5";
-                    
                     actualizarGeometriaLocal();
                 },
                 (error) => {
@@ -264,11 +320,7 @@
                     statusEl.innerText = "ERROR GPS";
                     statusEl.className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
                 },
-                { 
-                    enableHighAccuracy: true,  // Exige la antena GPS de alta precisión (satelital)
-                    timeout: 30000,            // Espera hasta 30 segundos para triangular la señal real
-                    maximumAge: 0              // Ignora posiciones cacheadas (evita saltos de 50 metros)
-                }
+                { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
             );
         }
 
@@ -276,7 +328,6 @@
             if (watchGpsInternoId !== null) {
                 navigator.geolocation.clearWatch(watchGpsInternoId);
                 watchGpsInternoId = null;
-                
                 const statusEl = document.getElementById('gps-status');
                 statusEl.innerText = "GPS PAUSADO";
                 statusEl.className = "text-[10px] font-bold text-slate-500 uppercase mt-0.5";
@@ -286,13 +337,9 @@
         function actualizarGeometriaLocal() {
             const utm = getUTM(lastLat, lastLon);
             lastUTM = `${utm.z} ${utm.e} ${utm.n}`;
-            
             document.getElementById('wm-geo').innerText = `LAT: ${lastLat.toFixed(6)} LON: ${lastLon.toFixed(6)}`;
             updateOrientationVisuals();
-            
-            if (map && appEstaVisible) {
-                map.setView([lastLat, lastLon]);
-            }
+            if (map && appEstaVisible) { map.setView([lastLat, lastLon]); }
         }
 
         async function toggleCameraPower() {
@@ -335,9 +382,7 @@
             }
         }
 
-        async function initCamera() {
-            if (isCameraPowered) { await encenderOApagarHardwareCamara(true); }
-        }
+        async function initCamera() { if (isCameraPowered) { await encenderOApagarHardwareCamara(true); } }
 
         document.addEventListener("visibilitychange", async () => {
             if (document.hidden) {
@@ -350,12 +395,8 @@
             } else {
                 appEstaVisible = true;
                 activarGpsInterno();
-                if (lastLat !== 0 && map) {
-                    map.setView([lastLat, lastLon]);
-                }
-                if (isCameraPowered) {
-                    await encenderOApagarHardwareCamara(true);
-                }
+                if (lastLat !== 0 && map) { map.setView([lastLat, lastLon]); }
+                if (isCameraPowered) { await encenderOApagarHardwareCamara(true); }
             }
         });
 
@@ -416,9 +457,18 @@
         }
 
         async function selectFolder() {
-            try { dirHandle = await window.showDirectoryPicker(); document.getElementById('folder-path').innerText = `Directorio: ${dirHandle.name}`; } catch (e) {}
+            try { 
+                dirHandle = await window.showDirectoryPicker(); 
+                document.getElementById('folder-path').innerText = `Directorio: ${dirHandle.name}`;
+                await storeFolderHandle(dirHandle); // Guarda de forma duradera
+            } catch (e) {}
         }
-        function clearFolder() { dirHandle = null; document.getElementById('folder-path').innerText = "No vinculado"; }
+        
+        async function clearFolder() { 
+            dirHandle = null; 
+            document.getElementById('folder-path').innerText = "No vinculado"; 
+            await removeFolderHandle(); // Elimina de IndexedDB
+        }
 
         function generateExifBlock(lat, lon, az) {
             const buffer = new ArrayBuffer(512); const dv = new DataView(buffer);
@@ -497,8 +547,13 @@
                 const now = new Date(); const pad = (v) => v.toString().padStart(2, '0');
                 const fileName = `IMG_${pad(now.getDate())}${pad(now.getMonth()+1)}${now.getFullYear()}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.jpg`;
                 if (dirHandle) {
-                    const file = await dirHandle.getFileHandle(fileName, { create: true }); const writer = await file.createWritable();
-                    await writer.write(new Blob([final])); await writer.close();
+                    try {
+                        const file = await dirHandle.getFileHandle(fileName, { create: true }); const writer = await file.createWritable();
+                        await writer.write(new Blob([final])); await writer.close();
+                    } catch (fsError) {
+                        // Si el llavero falló o se desvinculó de golpe, descarga de forma clásica como salvavidas
+                        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([final])); a.download = fileName; a.click();
+                    }
                 } else {
                     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([final])); a.download = fileName; a.click();
                 }
@@ -522,6 +577,16 @@
 
         window.onload = async () => {
             loadConfig();
+            
+            // Intenta recuperar el token físico de la carpeta guardada de sesiones anteriores
+            const savedHandle = await loadFolderHandle();
+            if (savedHandle) {
+                dirHandle = savedHandle;
+                document.getElementById('folder-path').innerText = `Directorio: ${dirHandle.name}`;
+            } else {
+                document.getElementById('folder-path').innerText = "No vinculado";
+            }
+
             await listCameras();
             await initCamera();
             initMap();
