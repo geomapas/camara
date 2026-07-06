@@ -168,9 +168,37 @@
     <canvas id="canvas-export" style="display:none"></canvas>
 
     <script>
+        // --- NUEVO SISTEMA DE ACTUALIZACIÓN FORZADA (QUASAR/WORKBOX STYLE) ---
         if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js'); });
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then(reg => {
+                    // Si hay un SW nuevo esperando en segundo plano, le obligamos a activarse
+                    if (reg.waiting) {
+                        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    }
+
+                    // Escuchamos si aparece un SW nuevo mientras la app está abierta
+                    reg.addEventListener('updatefound', () => {
+                        const newWorker = reg.installing;
+                        newWorker.addEventListener('statechange', () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                newWorker.postMessage({ type: 'SKIP_WAITING' });
+                            }
+                        });
+                    });
+                }).catch(err => console.error("Error registrando SW:", err));
+
+                // Cuando el nuevo Service Worker tome el control de la caché, refrescamos la pantalla automáticamente
+                let refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    if (!refreshing) {
+                        refreshing = true;
+                        window.location.reload();
+                    }
+                });
+            });
         }
+        // ---------------------------------------------------------------------
 
         let map, tileLayer, dirHandle = null;
         let lastLat = 0, lastLon = 0, rawHeading = 0, lastHeading = 0, lastUTM = "";
@@ -419,44 +447,34 @@
         }
         function clearFolder() { dirHandle = null; document.getElementById('folder-path').innerText = "No vinculado"; }
 
-        // REDISEÑO EXIF INTEGRAL: Estructura fija alineada con precisión absoluta de punteros para Windows
         function generateExifBlock(lat, lon, az, dateObj) {
             const pad = (v) => v.toString().padStart(2, '0');
             const dateStr = `${dateObj.getFullYear()}:${pad(dateObj.getMonth() + 1)}:${pad(dateObj.getDate())} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}\0`;
             
             const buffer = new ArrayBuffer(512); const dv = new DataView(buffer);
-            // Identificador TIFF (Intel - Little Endian)
             dv.setUint16(0, 0x4949, true); dv.setUint16(2, 42, true); dv.setUint32(4, 8, true); 
             
-            // --- IFD0 Principal (Contiene 3 campos mapeados a offsets fijos) ---
-            dv.setUint16(8, 3, true); // Número de entradas en IFD0
+            dv.setUint16(8, 3, true); 
             let p = 10;
             
             const offsetFechaIFD0 = 150;
             const offsetSubIFD = 180;
             const offsetGPS = 250;
             
-            // 1. Tag de fecha general de modificación (0x0132)
             dv.setUint16(p, 0x0132, true); dv.setUint16(p + 2, 2, true); dv.setUint32(p + 4, 20, true); dv.setUint32(p + 8, offsetFechaIFD0, true); p += 12;
-            // 2. Puntero al SubIFD Exif (0x8769) obligatorio para la fecha de captura
             dv.setUint16(p, 0x8769, true); dv.setUint16(p + 2, 4, true); dv.setUint32(p + 4, 1, true); dv.setUint32(p + 8, offsetSubIFD, true); p += 12;
-            // 3. Puntero al bloque de geolocalización GPS (0x8825)
             dv.setUint16(p, 0x8825, true); dv.setUint16(p + 2, 4, true); dv.setUint32(p + 4, 1, true); dv.setUint32(p + 8, offsetGPS, true); p += 12;
-            dv.setUint32(p, 0, true); // Terminación de IFD0
+            dv.setUint32(p, 0, true); 
             
-            // Inyección de la cadena de texto de la fecha IFD0
             for(let i=0; i<20; i++) { dv.setUint8(offsetFechaIFD0 + i, dateStr.charCodeAt(i)); }
             
-            // --- SUB-IFD EXIF (Obligatorio para que Windows rellene "Fecha de captura") ---
-            dv.setUint16(offsetSubIFD, 1, true); // 1 Entrada interna
-            // Tag DateTimeOriginal (0x9003) -> Apunta al mismo string de texto de arriba
+            dv.setUint16(offsetSubIFD, 1, true); 
             dv.setUint16(offsetSubIFD + 2, 0x9003, true); 
-            dv.setUint16(offsetSubIFD + 4, 2, true); // Tipo ASCII
-            dv.setUint32(offsetSubIFD + 6, 20, true); // Longitud del texto
-            dv.setUint32(offsetSubIFD + 10, offsetFechaIFD0, true); // Reutiliza el offset de la cadena de texto
+            dv.setUint16(offsetSubIFD + 4, 2, true); 
+            dv.setUint32(offsetSubIFD + 6, 20, true); 
+            dv.setUint32(offsetSubIFD + 10, offsetFechaIFD0, true); 
             dv.setUint32(offsetSubIFD + 14, 0, true);
             
-            // --- BLOQUE GPS ---
             let gpsP = offsetGPS; dv.setUint16(gpsP, 7, true); gpsP += 2;
             const baseDataOffset = offsetGPS + 2 + (7 * 12) + 4;
             const writeGPSEntry = (tag, type, count, val) => {
