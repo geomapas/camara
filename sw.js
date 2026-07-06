@@ -1,4 +1,4 @@
-const CACHE_NAME = 'geocam-pro-v7';
+const CACHE_NAME = 'geocam-pro-v7'; // <-- Recuerda cambiar a 'geocam-pro-v8' cuando subas cambios
 const ASSETS = [
   './',
   './index.html',
@@ -11,7 +11,7 @@ const ASSETS = [
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js'
 ];
 
-// Instalación: Guarda todo en la memoria de la tablet (la primera vez en la oficina)
+// Instalación: Guarda todo en la memoria de la tablet
 self.addEventListener('install', (e) => {
   e.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -20,20 +20,31 @@ self.addEventListener('install', (e) => {
   );
 });
 
-// Activación: Limpia cachés antiguas si actualizas el código en el futuro
+// Activación: Limpia cachés antiguas y toma el control de las pestañas inmediatamente
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) => Promise.all(
       keys.map((key) => { if (key !== CACHE_NAME) return caches.delete(key); })
-    ))
+    )).then(() => {
+      // Fuerza a que el nuevo Service Worker controle la página web de inmediato sin esperar a reiniciar
+      return self.clients.claim();
+    })
   );
 });
 
-// Intercepción: Si no hay internet, sirve los archivos desde la memoria local
+// Intercepción: Modo offline (sirve desde caché local)
 self.addEventListener('fetch', (e) => {
   e.respondWith(
     caches.match(e.request).then((cachedResponse) => {
       return cachedResponse || fetch(e.request);
     })
   );
+});
+
+// --- EL COMODÍN DE ACTUALIZACIÓN FORZADA (OBLIGATORIO) ---
+// Escucha el mensaje "SKIP_WAITING" enviado desde el nuevo HTML y mata el proceso viejo
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
