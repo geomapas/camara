@@ -248,7 +248,6 @@
             statusEl.innerText = "BUSCANDO...";
             statusEl.className = "text-[10px] font-bold text-orange-400 uppercase mt-0.5";
 
-            // CORRECCIÓN DE PRECISIÓN EXTREMA: Forzamos al sensor físico a activarse sin caché previa
             watchGpsInternoId = navigator.geolocation.watchPosition(
                 (position) => {
                     lastLat = position.coords.latitude;
@@ -265,9 +264,9 @@
                     statusEl.className = "text-[10px] font-bold text-red-500 uppercase mt-0.5";
                 },
                 { 
-                    enableHighAccuracy: true,  // Exige la antena GPS de alta precisión (satelital)
-                    timeout: 30000,            // Espera hasta 30 segundos para triangular la señal real
-                    maximumAge: 0              // Ignora posiciones cacheadas (evita saltos de 50 metros)
+                    enableHighAccuracy: true,  
+                    timeout: 30000,            
+                    maximumAge: 0              
                 }
             );
         }
@@ -420,26 +419,64 @@
         }
         function clearFolder() { dirHandle = null; document.getElementById('folder-path').innerText = "No vinculado"; }
 
-        function generateExifBlock(lat, lon, az) {
+        // REDISEÑO EXIF INTEGRAL: Estructura fija alineada con precisión absoluta de punteros para Windows
+        function generateExifBlock(lat, lon, az, dateObj) {
+            const pad = (v) => v.toString().padStart(2, '0');
+            const dateStr = `${dateObj.getFullYear()}:${pad(dateObj.getMonth() + 1)}:${pad(dateObj.getDate())} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}\0`;
+            
             const buffer = new ArrayBuffer(512); const dv = new DataView(buffer);
-            dv.setUint16(0, 0x4949, true); dv.setUint16(2, 42, true); dv.setUint32(4, 8, true); dv.setUint16(8, 1, true); 
-            dv.setUint16(10, 0x8825, true); dv.setUint16(12, 4, true); dv.setUint32(14, 1, true); dv.setUint32(18, 26, true); dv.setUint32(22, 0, true);
-            let p = 26; dv.setUint16(p, 7, true); p += 2; const baseDataOffset = 116;
-            const writeEntry = (tag, type, count, val) => {
-                dv.setUint16(p, tag, true); dv.setUint16(p + 2, type, true); dv.setUint32(p + 4, count, true); dv.setUint32(p + 8, val, true); p += 12;
+            // Identificador TIFF (Intel - Little Endian)
+            dv.setUint16(0, 0x4949, true); dv.setUint16(2, 42, true); dv.setUint32(4, 8, true); 
+            
+            // --- IFD0 Principal (Contiene 3 campos mapeados a offsets fijos) ---
+            dv.setUint16(8, 3, true); // Número de entradas en IFD0
+            let p = 10;
+            
+            const offsetFechaIFD0 = 150;
+            const offsetSubIFD = 180;
+            const offsetGPS = 250;
+            
+            // 1. Tag de fecha general de modificación (0x0132)
+            dv.setUint16(p, 0x0132, true); dv.setUint16(p + 2, 2, true); dv.setUint32(p + 4, 20, true); dv.setUint32(p + 8, offsetFechaIFD0, true); p += 12;
+            // 2. Puntero al SubIFD Exif (0x8769) obligatorio para la fecha de captura
+            dv.setUint16(p, 0x8769, true); dv.setUint16(p + 2, 4, true); dv.setUint32(p + 4, 1, true); dv.setUint32(p + 8, offsetSubIFD, true); p += 12;
+            // 3. Puntero al bloque de geolocalización GPS (0x8825)
+            dv.setUint16(p, 0x8825, true); dv.setUint16(p + 2, 4, true); dv.setUint32(p + 4, 1, true); dv.setUint32(p + 8, offsetGPS, true); p += 12;
+            dv.setUint32(p, 0, true); // Terminación de IFD0
+            
+            // Inyección de la cadena de texto de la fecha IFD0
+            for(let i=0; i<20; i++) { dv.setUint8(offsetFechaIFD0 + i, dateStr.charCodeAt(i)); }
+            
+            // --- SUB-IFD EXIF (Obligatorio para que Windows rellene "Fecha de captura") ---
+            dv.setUint16(offsetSubIFD, 1, true); // 1 Entrada interna
+            // Tag DateTimeOriginal (0x9003) -> Apunta al mismo string de texto de arriba
+            dv.setUint16(offsetSubIFD + 2, 0x9003, true); 
+            dv.setUint16(offsetSubIFD + 4, 2, true); // Tipo ASCII
+            dv.setUint32(offsetSubIFD + 6, 20, true); // Longitud del texto
+            dv.setUint32(offsetSubIFD + 10, offsetFechaIFD0, true); // Reutiliza el offset de la cadena de texto
+            dv.setUint32(offsetSubIFD + 14, 0, true);
+            
+            // --- BLOQUE GPS ---
+            let gpsP = offsetGPS; dv.setUint16(gpsP, 7, true); gpsP += 2;
+            const baseDataOffset = offsetGPS + 2 + (7 * 12) + 4;
+            const writeGPSEntry = (tag, type, count, val) => {
+                dv.setUint16(gpsP, tag, true); dv.setUint16(gpsP + 2, type, true); dv.setUint32(gpsP + 4, count, true); dv.setUint32(gpsP + 8, val, true); gpsP += 12;
             };
             const degToRat = (val) => {
                 const a = Math.abs(val); const d = Math.floor(a); const m = Math.floor((a - d) * 60); const s = Math.round(((a - d) * 60 - m) * 60 * 100);
                 return [[d, 1], [m, 1], [s, 100]];
             };
-            writeEntry(0x00, 1, 4, 0x00000302); writeEntry(0x01, 2, 2, (lat >= 0 ? 78 : 83)); writeEntry(0x02, 5, 3, baseDataOffset);
-            writeEntry(0x03, 2, 2, (lon >= 0 ? 69 : 87)); writeEntry(0x04, 5, 3, baseDataOffset + 24);
-            writeEntry(0x10, 2, 2, 84); writeEntry(0x11, 5, 1, baseDataOffset + 48);
-            dv.setUint32(p, 0, true); let dp = baseDataOffset;
+            writeGPSEntry(0x00, 1, 4, 0x00000302); writeGPSEntry(0x01, 2, 2, (lat >= 0 ? 78 : 83)); writeGPSEntry(0x02, 5, 3, baseDataOffset);
+            writeGPSEntry(0x03, 2, 2, (lon >= 0 ? 69 : 87)); writeGPSEntry(0x04, 5, 3, baseDataOffset + 24);
+            writeGPSEntry(0x10, 2, 2, 84); writeGPSEntry(0x11, 5, 1, baseDataOffset + 48);
+            dv.setUint32(gpsP, 0, true);
+            
+            let dp = baseDataOffset;
             degToRat(lat).forEach(r => { dv.setUint32(dp, r[0], true); dv.setUint32(dp+4, r[1], true); dp += 8; });
             degToRat(lon).forEach(r => { dv.setUint32(dp, r[0], true); dv.setUint32(dp+4, r[1], true); dp += 8; });
             dv.setUint32(dp, Math.round((az || 0) * 100), true); dv.setUint32(dp + 4, 100, true);
-            return new Uint8Array(buffer, 0, dp + 8);
+
+            return new Uint8Array(buffer, 0, baseDataOffset + 56);
         }
 
         async function takePhoto() {
@@ -489,13 +526,14 @@
             }
 
             canvas.toBlob(async (blob) => {
-                const exif = generateExifBlock(lastLat, lastLon, lastHeading); const original = new Uint8Array(await blob.arrayBuffer());
+                const fechaCapturaExacta = new Date(); 
+                const exif = generateExifBlock(lastLat, lastLon, lastHeading, fechaCapturaExacta); const original = new Uint8Array(await blob.arrayBuffer());
                 const exifHeader = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; const app1Len = 2 + exifHeader.length + exif.length;
                 const final = new Uint8Array(2 + 2 + app1Len + (original.length - 2));
                 final.set([0xFF, 0xD8], 0); final.set([0xFF, 0xE1], 2); final.set([(app1Len >> 8) & 0xFF, app1Len & 0xFF], 4);
                 final.set(exifHeader, 6); final.set(exif, 12); final.set(original.subarray(2), 12 + exif.length);
-                const now = new Date(); const pad = (v) => v.toString().padStart(2, '0');
-                const fileName = `IMG_${pad(now.getDate())}${pad(now.getMonth()+1)}${now.getFullYear()}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.jpg`;
+                const pad = (v) => v.toString().padStart(2, '0');
+                const fileName = `IMG_${pad(fechaCapturaExacta.getDate())}${pad(fechaCapturaExacta.getMonth()+1)}${fechaCapturaExacta.getFullYear()}_${pad(fechaCapturaExacta.getHours())}${pad(fechaCapturaExacta.getMinutes())}${pad(fechaCapturaExacta.getSeconds())}.jpg`;
                 if (dirHandle) {
                     const file = await dirHandle.getFileHandle(fileName, { create: true }); const writer = await file.createWritable();
                     await writer.write(new Blob([final])); await writer.close();
