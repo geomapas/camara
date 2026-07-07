@@ -117,6 +117,10 @@
                     <p id="folder-path" class="text-[11px] text-blue-300 italic break-all font-mono leading-tight">No vinculado</p>
                 </div>
             </div>
+
+            <div class="text-center pb-2">
+                <span id="sw-version-display" class="text-[10px] text-slate-600 font-mono">sw: --</span>
+            </div>
         </div>
     </div>
 
@@ -168,6 +172,26 @@
     <canvas id="canvas-export" style="display:none"></canvas>
 
     <script>
+        // Lee el sw.js real servido por el dispositivo (sin caché) y muestra
+        // su CACHE_NAME en el panel de ajustes, para poder verificar en campo
+        // qué versión tiene instalada cada equipo.
+        function mostrarVersionSW() {
+            fetch('./sw.js', { cache: 'no-store' })
+                .then(r => r.text())
+                .then(text => {
+                    const match = text.match(/CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
+                    const display = document.getElementById('sw-version-display');
+                    if (display) {
+                        display.innerText = match ? `sw: ${match[1]}` : 'sw: no encontrado';
+                    }
+                })
+                .catch(() => {
+                    const display = document.getElementById('sw-version-display');
+                    if (display) display.innerText = 'sw: error al leer';
+                });
+        }
+        mostrarVersionSW();
+
         // --- NUEVO SISTEMA DE ACTUALIZACIÓN FORZADA (QUASAR/WORKBOX STYLE) ---
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
@@ -391,9 +415,49 @@
             tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { crossOrigin: true }).addTo(map);
         }
 
+        // Calcula el azimut real hacia donde apunta la parte TRASERA del dispositivo
+        // (la cámara), compensando la inclinación completa (alpha+beta+gamma),
+        // no solo el giro plano. Necesario porque en Windows/Android no existe
+        // webkitCompassHeading (eso solo lo da iOS) y el "alpha" en bruto solo
+        // es fiable con la tablet totalmente plana.
+        function computeTiltCompensatedHeading(alpha, beta, gamma) {
+            const toRad = Math.PI / 180;
+            const a = alpha * toRad;
+            const b = beta * toRad;
+            const g = gamma * toRad;
+
+            const cA = Math.cos(a), sA = Math.sin(a);
+            const cB = Math.cos(b), sB = Math.sin(b);
+            const cG = Math.cos(g), sG = Math.sin(g);
+
+            // Componentes Este/Norte del vector que sale por la parte trasera
+            // del dispositivo (dirección de la cámara), proyectado sobre el
+            // plano horizontal.
+            const east  = -(cA * sG + cG * sA * sB);
+            const north = -(sA * sG - cA * cG * sB);
+
+            let heading = Math.atan2(east, north) * (180 / Math.PI);
+            if (heading < 0) heading += 360;
+            return heading;
+        }
+
         function initSensors() {
             const orientHandler = (e) => {
-                let h = e.webkitCompassHeading || (360 - e.alpha);
+                let h;
+                if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+                    // iOS: ya viene compensado por el sistema
+                    h = e.webkitCompassHeading;
+                } else if (e.alpha !== null && e.beta !== null && e.gamma !== null) {
+                    // Windows/Android: compensamos nosotros usando los 3 ejes
+                    h = computeTiltCompensatedHeading(e.alpha, e.beta, e.gamma);
+
+                    // Corrección por rotación de pantalla (uso en landscape con
+                    // cámara trasera mirando hacia adelante). screen.orientation.angle
+                    // es 0 en portrait "natural" y normalmente 90/270 en landscape,
+                    // según cómo se haya girado la tablet.
+                    const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+                    h = (h - screenAngle + 360) % 360;
+                }
                 if (h !== undefined) { rawHeading = h; updateOrientationVisuals(); }
             };
             window.addEventListener('deviceorientationabsolute', orientHandler);
