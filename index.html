@@ -566,6 +566,15 @@
             const btn = document.getElementById('shutter-btn');
             if (btn.disabled) return; btn.disabled = true;
 
+            try {
+                await tomarFotoInterna(btn);
+            } catch (err) {
+                console.error('Error al tomar la foto:', err);
+                btn.disabled = false;
+            }
+        }
+
+        async function tomarFotoInterna(btn) {
             const video = document.getElementById('video'); const canvas = document.getElementById('canvas-export'); const flash = document.getElementById('flash-effect');
             flash.classList.add('flash-active'); setTimeout(() => flash.classList.remove('flash-active'), 300);
 
@@ -592,6 +601,10 @@
                 const tiles = document.querySelectorAll('#mini-map .leaflet-tile'); const mapRect = document.getElementById('mini-map').getBoundingClientRect();
                 ctx.save(); ctx.beginPath(); ctx.rect(mX, mY, mapSize, mapSize); ctx.clip();
                 tiles.forEach(tile => {
+                    // Si no hay datos móviles, las teselas del mapa (OSM/Esri) pueden
+                    // no haber cargado y quedar en estado "broken". drawImage() lanza
+                    // una excepción con una imagen rota, así que las descartamos aquí.
+                    if (!tile.complete || tile.naturalWidth === 0) return;
                     const r = tile.getBoundingClientRect();
                     const dx = mX + ((r.left - mapRect.left) * (mapSize / mapRect.width)); const dy = mY + ((r.top - mapRect.top) * (mapSize / mapRect.height));
                     const dw = r.width * (mapSize / mapRect.width); const dh = r.height * (mapSize / mapRect.height);
@@ -607,23 +620,31 @@
                 ctx.restore(); ctx.strokeStyle = "white"; ctx.lineWidth = 3 * scale; ctx.strokeRect(mX, mY, mapSize, mapSize);
             }
 
-            canvas.toBlob(async (blob) => {
-                const fechaCapturaExacta = new Date(); 
-                const exif = generateExifBlock(lastLat, lastLon, lastHeading, fechaCapturaExacta); const original = new Uint8Array(await blob.arrayBuffer());
-                const exifHeader = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; const app1Len = 2 + exifHeader.length + exif.length;
-                const final = new Uint8Array(2 + 2 + app1Len + (original.length - 2));
-                final.set([0xFF, 0xD8], 0); final.set([0xFF, 0xE1], 2); final.set([(app1Len >> 8) & 0xFF, app1Len & 0xFF], 4);
-                final.set(exifHeader, 6); final.set(exif, 12); final.set(original.subarray(2), 12 + exif.length);
-                const pad = (v) => v.toString().padStart(2, '0');
-                const fileName = `IMG_${pad(fechaCapturaExacta.getDate())}${pad(fechaCapturaExacta.getMonth()+1)}${fechaCapturaExacta.getFullYear()}_${pad(fechaCapturaExacta.getHours())}${pad(fechaCapturaExacta.getMinutes())}${pad(fechaCapturaExacta.getSeconds())}.jpg`;
-                if (dirHandle) {
-                    const file = await dirHandle.getFileHandle(fileName, { create: true }); const writer = await file.createWritable();
-                    await writer.write(new Blob([final])); await writer.close();
-                } else {
-                    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([final])); a.download = fileName; a.click();
-                }
-                btn.disabled = false;
-            }, 'image/jpeg', 1.0); 
+            await new Promise((resolve, reject) => {
+                canvas.toBlob(async (blob) => {
+                    try {
+                        const fechaCapturaExacta = new Date();
+                        const exif = generateExifBlock(lastLat, lastLon, lastHeading, fechaCapturaExacta); const original = new Uint8Array(await blob.arrayBuffer());
+                        const exifHeader = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; const app1Len = 2 + exifHeader.length + exif.length;
+                        const final = new Uint8Array(2 + 2 + app1Len + (original.length - 2));
+                        final.set([0xFF, 0xD8], 0); final.set([0xFF, 0xE1], 2); final.set([(app1Len >> 8) & 0xFF, app1Len & 0xFF], 4);
+                        final.set(exifHeader, 6); final.set(exif, 12); final.set(original.subarray(2), 12 + exif.length);
+                        const pad = (v) => v.toString().padStart(2, '0');
+                        const fileName = `IMG_${pad(fechaCapturaExacta.getDate())}${pad(fechaCapturaExacta.getMonth()+1)}${fechaCapturaExacta.getFullYear()}_${pad(fechaCapturaExacta.getHours())}${pad(fechaCapturaExacta.getMinutes())}${pad(fechaCapturaExacta.getSeconds())}.jpg`;
+                        if (dirHandle) {
+                            const file = await dirHandle.getFileHandle(fileName, { create: true }); const writer = await file.createWritable();
+                            await writer.write(new Blob([final])); await writer.close();
+                        } else {
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([final])); a.download = fileName; a.click();
+                        }
+                        resolve();
+                    } catch (err) {
+                        reject(err);
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }, 'image/jpeg', 1.0);
+            });
         }
 
         function getUTM(lat, lon) {
