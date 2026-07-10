@@ -174,15 +174,25 @@
     <script>
         // Lee el sw.js real servido por el dispositivo (sin caché) y muestra
         // su CACHE_NAME en el panel de ajustes, para poder verificar en campo
-        // qué versión tiene instalada cada equipo.
+        // qué versión tiene instalada cada equipo. También comprueba cuántos
+        // recursos hay realmente guardados en el caché de ese nombre, para
+        // detectar instalaciones incompletas (p. ej. por un fallo de CDN).
         function mostrarVersionSW() {
             fetch('./sw.js', { cache: 'no-store' })
                 .then(r => r.text())
-                .then(text => {
+                .then(async (text) => {
                     const match = text.match(/CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
                     const display = document.getElementById('sw-version-display');
-                    if (display) {
-                        display.innerText = match ? `sw: ${match[1]}` : 'sw: no encontrado';
+                    if (!display) return;
+                    if (!match) { display.innerText = 'sw: no encontrado'; return; }
+
+                    const cacheName = match[1];
+                    try {
+                        const cache = await caches.open(cacheName);
+                        const keys = await cache.keys();
+                        display.innerText = `sw: ${cacheName} · caché: ${keys.length} recursos`;
+                    } catch {
+                        display.innerText = `sw: ${cacheName} · caché: no disponible`;
                     }
                 })
                 .catch(() => {
@@ -191,6 +201,15 @@
                 });
         }
         mostrarVersionSW();
+
+        // Pide almacenamiento persistente para que el navegador no borre el
+        // caché offline bajo presión de espacio sin avisar (puede pasar en
+        // tablets con poco almacenamiento libre).
+        if (navigator.storage && navigator.storage.persist) {
+            navigator.storage.persist().then((persistido) => {
+                console.log(persistido ? 'Almacenamiento persistente concedido.' : 'Almacenamiento persistente NO concedido (el caché podría borrarse bajo presión de espacio).');
+            });
+        }
 
         // --- NUEVO SISTEMA DE ACTUALIZACIÓN FORZADA (QUASAR/WORKBOX STYLE) ---
         if ('serviceWorker' in navigator) {
@@ -566,12 +585,45 @@
             const btn = document.getElementById('shutter-btn');
             if (btn.disabled) return; btn.disabled = true;
 
+            // Salvaguarda: si por lo que sea el proceso se queda "colgado"
+            // (esperando algo que nunca llega, en vez de fallar con un error
+            // que podamos atrapar), esto libera el botón igualmente a los
+            // 6 segundos, para que nunca se quede bloqueado de forma permanente.
+            let terminado = false;
+            const watchdog = setTimeout(() => {
+                if (!terminado) {
+                    console.warn('takePhoto: watchdog forzó la reactivación del botón (proceso colgado más de 6s)');
+                    mostrarErrorEnPantalla('La foto tardó demasiado y se ha reactivado el botón. Repite la foto.');
+                    btn.disabled = false;
+                }
+            }, 6000);
+
             try {
                 await tomarFotoInterna(btn);
             } catch (err) {
                 console.error('Error al tomar la foto:', err);
+                mostrarErrorEnPantalla(`Error al hacer foto: ${err.message || err}`);
                 btn.disabled = false;
+            } finally {
+                terminado = true;
+                clearTimeout(watchdog);
             }
+        }
+
+        // Muestra un mensaje de error visible unos segundos, para poder
+        // diagnosticar fallos de campo sin acceso a la consola del navegador.
+        function mostrarErrorEnPantalla(mensaje) {
+            let el = document.getElementById('error-toast');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'error-toast';
+                el.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#b91c1c;color:white;padding:10px 16px;border-radius:8px;font-size:13px;z-index:999;max-width:90%;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+                document.body.appendChild(el);
+            }
+            el.innerText = mensaje;
+            el.style.display = 'block';
+            clearTimeout(el._hideTimeout);
+            el._hideTimeout = setTimeout(() => { el.style.display = 'none'; }, 8000);
         }
 
         async function tomarFotoInterna(btn) {
