@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoCam</title>
+    <link rel="manifest" href="./manifest.json">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
+    <style>
+        :root { --panel-bg: #0f172a; --accent: #3b82f6; }
+        body { background-color: #020617; color: #f8fafc; font-family: system-ui; height: 100vh; overflow: hidden; display: flex; flex-direction: row; margin: 0; }
+        #viewport-container { position: relative; flex: 1; height: 100vh; background: #000; overflow: hidden; }
+        #viewport { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+        video { width: 100%; height: 100%; object-fit: cover; transition: transform 0.1s ease-out; }
+        #flash-effect { position: absolute; inset: 0; background: white; opacity: 0; pointer-events: none; z-index: 100; }
+        .flash-active { animation: flashAnim 0.3s ease-out; }
+        @keyframes flashAnim { 0% { opacity: 1; } 100% { opacity: 0; } }
+        #ui-layer { position: absolute; inset: 0; z-index: 20; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-end; padding: 2rem; }
+        .watermark-preview { text-align: right; text-shadow: 2px 2px 4px rgba(0,0,0,0.9); font-family: 'Courier New', monospace; font-weight: bold; line-height: 1.4; }
+        #mini-map-container { position: absolute; bottom: 2rem; left: 2rem; border: 2px solid white; z-index: 30; background: #000; overflow: hidden; pointer-events: none; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); aspect-ratio: 1 / 1; width: 20%; }
+        #mini-map { width: 100%; height: 100%; }
+        .map-indicator-wrapper { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1000; }
+        .location-dot { width: 10px; height: 10px; background: #ff0000; border: 2px solid white; border-radius: 50%; }
+        .direction-arrow { position: absolute; bottom: 5px; left: 50%; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 18px solid #ff0000; transform-origin: bottom center; margin-left: -5px; }
+        #config-panel { position: fixed; top: 0; right: -400px; width: 400px; height: 100%; background: var(--panel-bg); z-index: 200; padding: 1.5rem; transition: right 0.3s ease; overflow-y: auto; border-left: 1px solid #1e293b; }
+        #config-panel.open { right: 0; }
+        .control-side-bar { width: 110px; background: #0f172a; display: flex; flex-direction: column; align-items: center; justify-content: space-between; padding: 1.5rem 0; border-left: 1px solid #334155; z-index: 50; flex-shrink: 0; }
+        .shutter-btn { width: 80px; height: 80px; background: white; border-radius: 50%; border: 6px solid #475569; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.1s; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .shutter-btn:active { transform: scale(0.9); }
+        .cam-toggle-btn { width: 50px; height: 50px; background: #1e293b; border: 1px solid #334155; border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .cam-toggle-btn.active { background: #166534; border-color: #22c55e; }
+        .vertical-slider-container { display: flex; flex-direction: column; align-items: center; height: 200px; width: 100%; }
+        .vertical-slider { -webkit-appearance: slider-vertical; width: 30px; height: 100%; cursor: pointer; }
+        #cog-btn { position: fixed; top: 1rem; left: 1rem; z-index: 210; }
+    </style>
+</head>
+<body>
+
+    <button id="cog-btn" onclick="toggleConfig()" class="bg-slate-800/90 p-4 rounded-full border border-slate-600 shadow-xl">
+        <i class="fas fa-cog text-xl text-white"></i>
+    </button>
+
+    <div id="config-panel">
+        <h2 class="text-xl font-bold mb-6 text-blue-400 italic text-center">AJUSTES TÉCNICOS</h2>
+        
+        <div class="space-y-6">
+            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
+                <label class="text-xs font-bold text-slate-500 uppercase">Hardware de Video</label>
+                <div class="space-y-2">
+                    <span class="text-xs text-slate-400">SELECCIONAR CÁMARA</span>
+                    <select id="cfg-camera-device" onchange="saveConfig(); initCamera();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
+                        <option value="">Cargando dispositivos...</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <span class="text-xs text-slate-400">RESOLUCIÓN DE TRABAJO</span>
+                    <select id="cfg-resolution" onchange="saveConfig(); initCamera();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
+                        <option value="max">Máxima (Sensor Nativo)</option>
+                        <option value="4k">Ultra HD (4K)</option>
+                        <option value="1080">Full HD (1080p)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
+                <label class="text-xs font-bold text-slate-500 uppercase">Navegación y Sensores</label>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm">Mostrar Mapa</span>
+                    <input type="checkbox" id="cfg-show-map" checked onchange="saveConfig(); updateUI();">
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm italic text-blue-300">Incluir Rumbo (Flecha)</span>
+                    <input type="checkbox" id="cfg-show-heading" checked onchange="saveConfig(); updateUI();">
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-bold text-orange-400">Invertir Azimut (180°)</span>
+                    <input type="checkbox" id="cfg-invert-heading" onchange="saveConfig(); updateOrientationVisuals();">
+                </div>
+                <select id="cfg-map-type" onchange="saveConfig(); updateUI();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
+                    <option value="street">Mapa Vial (Standard)</option>
+                    <option value="satellite">Satélite (Híbrido)</option>
+                </select>
+                <div>
+                    <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>TAMAÑO MAPA</span><span id="val-map-size">20%</span></div>
+                    <input type="range" id="cfg-map-size-slider" min="5" max="25" value="20" oninput="saveConfig(); updateUI();" class="w-full">
+                </div>
+                <div>
+                    <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>ZOOM MAPA</span><span id="val-map-zoom">16</span></div>
+                    <input type="range" id="cfg-map-zoom" min="15" max="25" value="16" oninput="saveConfig(); updateUI();" class="w-full">
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
+                <label class="text-xs font-bold text-slate-500 uppercase">Origen de Datos GPS</label>
+                <div class="space-y-2">
+                    <label class="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="radio" name="cfg-gps-source" value="geolocation" checked onchange="onGpsSourceChange()">
+                        <span>Ubicación de Windows</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-sm">
+                        <input type="radio" name="cfg-gps-source" value="serial" onchange="onGpsSourceChange()">
+                        <span>Puerto COM (NMEA)</span>
+                    </label>
+                </div>
+                <div id="serial-config" class="space-y-2 hidden">
+                    <div class="space-y-1">
+                        <span class="text-xs text-slate-400">VELOCIDAD (BAUDIOS)</span>
+                        <select id="cfg-serial-baud" onchange="saveConfig(); reconectarSerialSiActivo();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
+                            <option value="4800">4800</option>
+                            <option value="9600" selected>9600</option>
+                            <option value="19200">19200</option>
+                            <option value="38400">38400</option>
+                            <option value="57600">57600</option>
+                            <option value="115200">115200</option>
+                        </select>
+                    </div>
+                    <button onclick="elegirPuertoSerial()" class="w-full bg-blue-600 p-2 rounded-lg font-bold text-sm text-white">SELECCIONAR PUERTO COM</button>
+                    <div id="serial-status" class="text-[11px] text-slate-400 italic font-mono">Sin puerto vinculado</div>
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
+                <label class="text-xs font-bold text-slate-500 uppercase">Estilo de Leyenda</label>
+                <div class="flex items-center justify-between">
+                    <span class="text-sm">Color de Fuente</span>
+                    <input type="color" id="cfg-text-color" value="#ffffff" onchange="saveConfig(); updateUI();" class="bg-transparent">
+                </div>
+                <div>
+                    <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>TAMAÑO FUENTE</span><span id="val-text-size">30px</span></div>
+                    <input type="range" id="cfg-text-size" min="12" max="60" value="30" oninput="saveConfig(); updateUI();" class="w-full">
+                </div>
+            </div>
+
+            <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 space-y-4">
+                <label class="text-xs font-bold text-slate-500 uppercase">Carpeta Destino</label>
+                <div class="flex gap-2">
+                    <button onclick="selectFolder()" class="flex-1 bg-blue-600 p-3 rounded-lg font-bold text-sm text-white">VINCULAR</button>
+                    <button onclick="clearFolder()" class="bg-red-600/20 hover:bg-red-600 p-3 rounded-lg text-red-500 hover:text-white transition-colors border border-red-600/50">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </div>
+                <div id="folder-display" class="bg-slate-950 p-3 rounded-lg border border-slate-800 mt-2">
+                    <p id="folder-path" class="text-[11px] text-blue-300 italic break-all font-mono leading-tight">No vinculado</p>
+                </div>
+            </div>
+
+            <div class="text-center pb-2">
+                <span id="sw-version-display" class="text-[10px] text-slate-600 font-mono">sw: --</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="viewport-container">
+        <div id="viewport">
+            <video id="video" autoplay playsinline muted></video>
+            <div id="flash-effect"></div>
+            
+            <div id="ui-layer">
+                <div id="watermark" class="watermark-preview">
+                    <div id="wm-date">Cargando...</div>
+                    <div id="wm-geo">LAT: -- LON: --</div>
+                    <div id="wm-extra">UTM: -- AZ: --</div>
+                </div>
+            </div>
+
+            <div id="mini-map-container">
+                <div id="mini-map"></div>
+                <div id="map-indicator-ui" class="map-indicator-wrapper">
+                    <div id="map-arrow" class="direction-arrow"></div>
+                    <div class="location-dot"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="control-side-bar">
+        <div class="flex flex-col items-center gap-1 mt-2 w-full px-2 text-center">
+            <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Estado GPS</span>
+            <div id="gps-status" class="text-[10px] font-bold text-orange-400 uppercase mt-0.5">BUSCANDO...</div>
+            <div id="compass-val" class="text-sm font-mono text-white mt-1">---°</div>
+        </div>
+
+        <div class="flex flex-col items-center gap-2">
+            <button id="cam-toggle-btn" onclick="toggleCameraPower()" class="cam-toggle-btn active" title="Encender/Apagar Cámara">
+                <i id="cam-toggle-icon" class="fas fa-video text-white text-lg"></i>
+            </button>
+            <button onclick="takePhoto()" id="shutter-btn" class="shutter-btn">
+                <div class="w-14 h-14 bg-red-600 rounded-full border-2 border-white"></div>
+            </button>
+        </div>
+
+        <div class="vertical-slider-container mb-4">
+            <span class="text-[10px] text-slate-500 font-bold uppercase mb-2">ZOOM</span>
+            <input type="range" id="cam-zoom" min="1" max="8" step="0.1" value="1" oninput="applyCamZoom(this.value)" class="vertical-slider">
+        </div>
+    </div>
+
+    <canvas id="canvas-export" style="display:none"></canvas>
+
+    <script>
+        // Lee el sw.js real servido por el dispositivo (sin caché) y muestra
+        // su CACHE_NAME en el panel de ajustes, para poder verificar en campo
+        // qué versión tiene instalada cada equipo. También comprueba cuántos
+        // recursos hay realmente guardados en el caché de ese nombre, para
+        // detectar instalaciones incompletas (p. ej. por un fallo de CDN).
+        function mostrarVersionSW() {
+            fetch('./sw.js', { cache: 'no-store' })
+                .then(r => r.text())
+                .then(async (text) => {
+                    const match = text.match(/CACHE_NAME\s*=\s*['"]([^'"]+)['"]/);
+                    const display = document.getElementById('sw-version-display');
+                    if (!display) return;
+                    if (!match) { display.innerText = 'sw: no encontrado'; return; }
+
+                    const cacheName = match[1];
+                    try {
+                        const cache = await caches.open(cacheName);
+                        const keys = await cache.keys();
+                        display.innerText = `sw: ${cacheName} · caché: ${keys.length} recursos`;
+                    } catch {
+                        display.innerText = `sw: ${cacheName} · caché: no disponible`;
+                    }
+                })
+                .catch(() => {
+                    const display = document.getElementById('sw-version-display');
+                    if (display) display.innerText = 'sw: error al leer';
+                });
+        }
+        mostrarVersionSW();
+
+        // Pide almacenamiento persistente para que el navegador no borre el
+        // caché offline bajo presión de espacio sin avisar (puede pasar en
+        // tablets con poco almacenamiento libre).
+        if (navigator.storage && navigator.storage.persist) {
+            navigator.storage.persist().then((persistido) => {
+                console.log(persistido ? 'Almacenamiento persistente concedido.' : 'Almacenamiento persistente NO concedido (el caché podría borrarse bajo presión de espacio).');
+            });
+        }
+
+        // --- NUEVO SISTEMA DE ACTUALIZACIÓN FORZADA (QUASAR/WORKBOX STYLE) ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').then(reg => {
+                    // Si hay un SW nuevo esperando en segundo plano, le obligamos a activarse
+                    if (reg.waiting) {
+                        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    }
+
+                    // Escuchamos si aparece un SW nuevo mientras la app está abierta
+                    reg.addEventListener('updatefound', () => {
+                        const newWorker = reg.installing;
+                        newWorker.addEventListener('statechange', () => {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                newWorker.postMessage({ type: 'SKIP_WAITING' });
+                            }
+                        });
+                    });
+                }).catch(err => console.error("Error registrando SW:", err));
+
+                // Cuando el nuevo Service Worker tome el control de la caché, refrescamos la pantalla automáticamente
+                let refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    if (!refreshing) {
+                        refreshing = true;
+                        window.location.reload();
+                    }
+                });
+            });
+        }
+        // ---------------------------------------------------------------------
+
+        let map, tileLayer, dirHandle = null;
+        let lastLat = 0, lastLon = 0, rawHeading = 0, lastHeading = 0, lastUTM = "";
+        let videoTrack = null;
+        let currentZoom = 1;
+        let isCameraPowered = true;
+        
+        let watchGpsInternoId = null;
+        let appEstaVisible = true;
+
+        function toggleConfig() { document.getElementById('config-panel').classList.toggle('open'); }
+
+        async function listCameras() {
+            const select = document.getElementById('cfg-camera-device');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(d => d.kind === 'videoinput');
+                select.innerHTML = '';
+                let backCameraId = null;
+                videoDevices.forEach((device, index) => {
+                    const opt = document.createElement('option');
+                    opt.value = device.deviceId; opt.text = device.label || `Cámara ${index + 1}`;
+                    if (/back|trasera|rear|environment/i.test(device.label) && !backCameraId) backCameraId = device.deviceId;
+                    select.appendChild(opt);
+                });
+                const saved = localStorage.getItem('geocam_config');
+                if (saved) {
+                    const config = JSON.parse(saved); if (config.deviceId) select.value = config.deviceId;
+                } else if (backCameraId) { select.value = backCameraId; }
+                stream.getTracks().forEach(t => t.stop());
+            } catch (err) { console.error("Error listando cámaras:", err); }
+        }
+
+        function saveConfig() {
+            const config = {
+                resolution: document.getElementById('cfg-resolution').value,
+                deviceId: document.getElementById('cfg-camera-device').value,
+                showMap: document.getElementById('cfg-show-map').checked,
+                showHeading: document.getElementById('cfg-show-heading').checked,
+                invertHeading: document.getElementById('cfg-invert-heading').checked,
+                mapType: document.getElementById('cfg-map-type').value,
+                mapSize: document.getElementById('cfg-map-size-slider').value,
+                mapZoom: document.getElementById('cfg-map-zoom').value,
+                textColor: document.getElementById('cfg-text-color').value,
+                textSize: document.getElementById('cfg-text-size').value,
+                lastZoom: currentZoom,
+                gpsSource: (document.querySelector('input[name="cfg-gps-source"]:checked') || {}).value || 'geolocation',
+                serialBaud: document.getElementById('cfg-serial-baud').value
+            };
+            localStorage.setItem('geocam_config', JSON.stringify(config));
+        }
+
+        function loadConfig() {
+            const saved = localStorage.getItem('geocam_config');
+            if (!saved) return;
+            const config = JSON.parse(saved);
+            if (config.resolution) document.getElementById('cfg-resolution').value = config.resolution;
+            if (config.showMap !== undefined) document.getElementById('cfg-show-map').checked = config.showMap;
+            if (config.showHeading !== undefined) document.getElementById('cfg-show-heading').checked = config.showHeading;
+            if (config.invertHeading !== undefined) document.getElementById('cfg-invert-heading').checked = config.invertHeading;
+            if (config.mapType) document.getElementById('cfg-map-type').value = config.mapType;
+            if (config.mapSize) document.getElementById('cfg-map-size-slider').value = config.mapSize;
+            if (config.mapZoom) document.getElementById('cfg-map-zoom').value = config.mapZoom;
+            if (config.textColor) document.getElementById('cfg-text-color').value = config.textColor;
+            if (config.textSize) document.getElementById('cfg-text-size').value = config.textSize;
+            if (config.lastZoom) { currentZoom = config.lastZoom; document.getElementById('cam-zoom').value = currentZoom; }
+            if (config.serialBaud) document.getElementById('cfg-serial-baud').value = config.serialBaud;
+            const src = config.gpsSource === 'serial' ? 'serial' : 'geolocation';
+            const radio = document.querySelector('input[name="cfg-gps-source"][value="' + src + '"]');
+            if (radio) radio.checked = true;
+            document.getElementById('serial-config').classList.toggle('hidden', src !== 'serial');
+        }
+
+        let serialPort = null, serialReader = null, serialBuffer = "", serialActivo = false;
+
+        function setGpsStatus(txt, colorClass) {
+            const el = document.getElementById('gps-status');
+            el.innerText = txt;
+            el.className = "text-[10px] font-bold uppercase mt-0.5 " + colorClass;
+        }
+
+        function getGpsSource() {
+            const r = document.querySelector('input[name="cfg-gps-source"]:checked');
+            return r ? r.value : 'geolocation';
+        }
+
+        function activarGpsInterno() {
+            desactivarGpsInterno();
+            if (getGpsSource() === 'serial') {
+                activarGpsSerial();
+            } else {
+                activarGpsGeolocation();
+            }
+        }
+
+        function desactivarGpsInterno() {
+            if (watchGpsInternoId !== null) {
+                navigator.geolocation.clearWatch(watchGpsInternoId);
+                watchGpsInternoId = null;
+            }
+            desactivarGpsSerial();
+            setGpsStatus("GPS PAUSADO", "text-slate-500");
+        }
+
+        function activarGpsGeolocation() {
+            if (!("geolocation" in navigator)) {
+                setGpsStatus("SIN GPS", "text-red-500");
+                return;
+            }
+            setGpsStatus("BUSCANDO...", "text-orange-400");
+            watchGpsInternoId = navigator.geolocation.watchPosition(
+                (position) => {
+                    lastLat = position.coords.latitude;
+                    lastLon = position.coords.longitude;
+                    setGpsStatus("GPS ACTIVO", "text-green-500");
+                    actualizarGeometriaLocal();
+                },
+                (error) => {
+                    console.error("Error leyendo GPS interno:", error);
+                    setGpsStatus("ERROR GPS", "text-red-500");
+                },
+                { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 }
+            );
+        }
+
+        async function activarGpsSerial() {
+            if (!('serial' in navigator)) {
+                setGpsStatus("SIN WEB SERIAL", "text-red-500");
+                document.getElementById('serial-status').innerText = "Web Serial no soportado en este navegador";
+                return;
+            }
+            // Intento silencioso: reusar un puerto previamente autorizado
+            try {
+                const ports = await navigator.serial.getPorts();
+                if (ports.length > 0) {
+                    serialPort = ports[0];
+                    await abrirSerialYLeer();
+                    return;
+                }
+                setGpsStatus("SIN PUERTO", "text-orange-400");
+                document.getElementById('serial-status').innerText = "Pulsa 'Seleccionar puerto COM' para vincular uno";
+            } catch (e) {
+                console.error("Error accediendo a puertos serie:", e);
+                setGpsStatus("ERROR SERIE", "text-red-500");
+            }
+        }
+
+        async function elegirPuertoSerial() {
+            if (!('serial' in navigator)) {
+                mostrarErrorEnPantalla("Este navegador no soporta Web Serial. Usa Chrome/Edge en Windows.");
+                return;
+            }
+            try {
+                desactivarGpsSerial();
+                serialPort = await navigator.serial.requestPort();
+                await abrirSerialYLeer();
+            } catch (e) {
+                console.error("Selección de puerto cancelada o fallida:", e);
+            }
+        }
+
+        async function abrirSerialYLeer() {
+            if (!serialPort) return;
+            const baud = parseInt(document.getElementById('cfg-serial-baud').value) || 9600;
+            try {
+                await serialPort.open({ baudRate: baud });
+                setGpsStatus("SERIE CONECTADO", "text-orange-400");
+                document.getElementById('serial-status').innerText = `Conectado a ${baud} baudios`;
+                serialActivo = true;
+                leerSerialLoop();
+            } catch (e) {
+                console.error("No se pudo abrir el puerto serie:", e);
+                setGpsStatus("ERROR SERIE", "text-red-500");
+                document.getElementById('serial-status').innerText = "Error al abrir: " + (e.message || e);
+                serialPort = null;
+            }
+        }
+
+        async function leerSerialLoop() {
+            const decoder = new TextDecoderStream();
+            const closedPromise = serialPort.readable.pipeTo(decoder.writable).catch(() => {});
+            serialReader = decoder.readable.getReader();
+            try {
+                while (serialActivo) {
+                    const { value, done } = await serialReader.read();
+                    if (done) break;
+                    if (value) {
+                        serialBuffer += value;
+                        let idx;
+                        while ((idx = serialBuffer.indexOf('\n')) >= 0) {
+                            const line = serialBuffer.slice(0, idx).trim();
+                            serialBuffer = serialBuffer.slice(idx + 1);
+                            if (line) procesarNMEA(line);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Error leyendo serie:", e);
+            } finally {
+                try { serialReader.releaseLock(); } catch (e) {}
+                await closedPromise.catch(() => {});
+            }
+        }
+
+        async function desactivarGpsSerial() {
+            serialActivo = false;
+            if (serialReader) {
+                try { await serialReader.cancel(); } catch (e) {}
+                serialReader = null;
+            }
+            if (serialPort) {
+                try { await serialPort.close(); } catch (e) {}
+            }
+            serialBuffer = "";
+        }
+
+        async function reconectarSerialSiActivo() {
+            if (getGpsSource() === 'serial') {
+                await desactivarGpsSerial();
+                await activarGpsSerial();
+            }
+        }
+
+        function onGpsSourceChange() {
+            saveConfig();
+            const src = getGpsSource();
+            document.getElementById('serial-config').classList.toggle('hidden', src !== 'serial');
+            activarGpsInterno();
+        }
+
+        // Parser mínimo NMEA: soporta $GxRMC y $GxGGA
+        function procesarNMEA(line) {
+            if (!line.startsWith('$')) return;
+            const body = line.split('*')[0];
+            const parts = body.split(',');
+            const type = parts[0].slice(3); // RMC, GGA, ...
+            let lat = null, lon = null, ok = false;
+            if (type === 'RMC' && parts[2] === 'A') {
+                lat = nmeaToDec(parts[3], parts[4]);
+                lon = nmeaToDec(parts[5], parts[6]);
+                ok = true;
+            } else if (type === 'GGA' && parts[6] && parts[6] !== '0') {
+                lat = nmeaToDec(parts[2], parts[3]);
+                lon = nmeaToDec(parts[4], parts[5]);
+                ok = true;
+            }
+            if (ok && lat !== null && lon !== null && !isNaN(lat) && !isNaN(lon)) {
+                lastLat = lat;
+                lastLon = lon;
+                setGpsStatus("SERIE ACTIVO", "text-green-500");
+                actualizarGeometriaLocal();
+            }
+        }
+
+        function nmeaToDec(raw, hemi) {
+            if (!raw || raw.length < 3) return null;
+            const dotIdx = raw.indexOf('.');
+            const degLen = (dotIdx > 4) ? dotIdx - 2 : 2;
+            const deg = parseFloat(raw.slice(0, degLen));
+            const min = parseFloat(raw.slice(degLen));
+            if (isNaN(deg) || isNaN(min)) return null;
+            let dec = deg + min / 60;
+            if (hemi === 'S' || hemi === 'W') dec = -dec;
+            return dec;
+        }
+
+        function actualizarGeometriaLocal() {
+            const utm = getUTM(lastLat, lastLon);
+            lastUTM = `${utm.z} ${utm.e} ${utm.n}`;
+            
+            document.getElementById('wm-geo').innerText = `LAT: ${lastLat.toFixed(6)} LON: ${lastLon.toFixed(6)}`;
+            updateOrientationVisuals();
+            
+            if (map && appEstaVisible) {
+                map.setView([lastLat, lastLon]);
+            }
+        }
+
+        async function toggleCameraPower() {
+            const btn = document.getElementById('cam-toggle-btn');
+            const icon = document.getElementById('cam-toggle-icon');
+            if (isCameraPowered) {
+                encenderOApagarHardwareCamara(false);
+                btn.classList.remove('active'); icon.classList.replace('fa-video', 'fa-video-slash');
+                isCameraPowered = false;
+            } else {
+                await encenderOApagarHardwareCamara(true);
+                btn.classList.add('active'); icon.classList.replace('fa-video-slash', 'fa-video');
+                isCameraPowered = true;
+            }
+        }
+
+        async function encenderOApagarHardwareCamara(encender) {
+            if (!encender) {
+                if (videoTrack) { videoTrack.stop(); videoTrack = null; }
+                document.getElementById('video').srcObject = null;
+            } else {
+                const resMode = document.getElementById('cfg-resolution').value;
+                const deviceId = document.getElementById('cfg-camera-device').value;
+                let constraints = { video: { facingMode: "environment" } };
+                if (deviceId) { constraints.video = { deviceId: { exact: deviceId } }; }
+                if (resMode === 'max') { constraints.video.width = { ideal: 7680 }; constraints.video.height = { ideal: 4320 }; } 
+                else if (resMode === '4k') { constraints.video.width = { ideal: 3840 }; constraints.video.height = { ideal: 2160 }; } 
+                else { constraints.video.width = { ideal: 1920 }; constraints.video.height = { ideal: 1080 }; }
+
+                try {
+                    if (videoTrack) videoTrack.stop();
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    const videoEl = document.getElementById('video');
+                    videoEl.srcObject = stream; videoTrack = stream.getVideoTracks()[0];
+                    videoEl.onloadedmetadata = () => setTimeout(() => applyCamZoom(currentZoom), 500);
+                } catch (err) { 
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                    document.getElementById('video').srcObject = stream; videoTrack = stream.getVideoTracks()[0];
+                }
+            }
+        }
+
+        async function initCamera() {
+            if (isCameraPowered) { await encenderOApagarHardwareCamara(true); }
+        }
+
+        document.addEventListener("visibilitychange", async () => {
+            if (document.hidden) {
+                appEstaVisible = false;
+                if (isCameraPowered && videoTrack) {
+                    if (videoTrack) { videoTrack.stop(); videoTrack = null; }
+                    document.getElementById('video').srcObject = null;
+                }
+                desactivarGpsInterno();
+            } else {
+                appEstaVisible = true;
+                activarGpsInterno();
+                if (lastLat !== 0 && map) {
+                    map.setView([lastLat, lastLon]);
+                }
+                if (isCameraPowered) {
+                    await encenderOApagarHardwareCamara(true);
+                }
+            }
+        });
+
+        function initMap() {
+            map = L.map('mini-map', { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false }).setView([0,0], 16);
+            tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { crossOrigin: true }).addTo(map);
+        }
+
+        // Calcula el azimut real hacia donde apunta la parte TRASERA del dispositivo
+        // (la cámara), compensando la inclinación completa (alpha+beta+gamma),
+        // no solo el giro plano. Necesario porque en Windows/Android no existe
+        // webkitCompassHeading (eso solo lo da iOS) y el "alpha" en bruto solo
+        // es fiable con la tablet totalmente plana.
+        function computeTiltCompensatedHeading(alpha, beta, gamma) {
+            const toRad = Math.PI / 180;
+            const a = alpha * toRad;
+            const b = beta * toRad;
+            const g = gamma * toRad;
+
+            const cA = Math.cos(a), sA = Math.sin(a);
+            const cB = Math.cos(b), sB = Math.sin(b);
+            const cG = Math.cos(g), sG = Math.sin(g);
+
+            // Componentes Este/Norte del vector que sale por la parte trasera
+            // del dispositivo (dirección de la cámara), proyectado sobre el
+            // plano horizontal.
+            const east  = -(cA * sG + cG * sA * sB);
+            const north = -(sA * sG - cA * cG * sB);
+
+            let heading = Math.atan2(east, north) * (180 / Math.PI);
+            if (heading < 0) heading += 360;
+            return heading;
+        }
+
+        function initSensors() {
+            const orientHandler = (e) => {
+                let h;
+                if (e.webkitCompassHeading !== undefined && e.webkitCompassHeading !== null) {
+                    // iOS: ya viene compensado por el sistema
+                    h = e.webkitCompassHeading;
+                } else if (e.alpha !== null && e.beta !== null && e.gamma !== null) {
+                    // Windows/Android: compensamos nosotros usando los 3 ejes
+                    h = computeTiltCompensatedHeading(e.alpha, e.beta, e.gamma);
+
+                    // Corrección por rotación de pantalla (uso en landscape con
+                    // cámara trasera mirando hacia adelante). screen.orientation.angle
+                    // es 0 en portrait "natural" y normalmente 90/270 en landscape,
+                    // según cómo se haya girado la tablet.
+                    const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+                    h = (h - screenAngle + 360) % 360;
+                }
+                if (h !== undefined) { rawHeading = h; updateOrientationVisuals(); }
+            };
+            window.addEventListener('deviceorientationabsolute', orientHandler);
+            window.addEventListener('deviceorientation', orientHandler);
+        }
+
+        function updateOrientationVisuals() {
+            let finalH = rawHeading;
+            if (document.getElementById('cfg-invert-heading').checked) { finalH = (finalH + 180) % 360; }
+            lastHeading = Math.round(finalH);
+            document.getElementById('compass-val').innerText = `${lastHeading.toString().padStart(3, '0')}°`;
+            document.getElementById('map-arrow').style.transform = `rotate(${lastHeading}deg)`;
+            document.getElementById('wm-extra').innerText = `UTM: ${lastUTM || '--'} - AZ: ${lastHeading}°`;
+        }
+
+        function updateUI() {
+            const showMap = document.getElementById('cfg-show-map').checked;
+            const showHeading = document.getElementById('cfg-show-heading').checked;
+            const mapSize = document.getElementById('cfg-map-size-slider').value;
+            const mapZoom = document.getElementById('cfg-map-zoom').value;
+            const mapType = document.getElementById('cfg-map-type').value;
+            const color = document.getElementById('cfg-text-color').value;
+            const size = document.getElementById('cfg-text-size').value;
+
+            document.getElementById('val-map-size').innerText = mapSize + "%";
+            document.getElementById('val-map-zoom').innerText = mapZoom;
+            document.getElementById('val-text-size').innerText = size + "px";
+
+            const container = document.getElementById('mini-map-container');
+            container.style.display = showMap ? 'block' : 'none'; container.style.width = mapSize + "%";
+            document.getElementById('map-arrow').style.display = showHeading ? 'block' : 'none';
+            document.getElementById('watermark').style.color = color; document.getElementById('watermark').style.fontSize = size + "px";
+
+            if (map) {
+                map.setZoom(mapZoom);
+                setTimeout(() => map.invalidateSize(), 100);
+                tileLayer.setUrl(mapType === 'satellite' ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+            }
+        }
+
+        function applyCamZoom(v) {
+            currentZoom = parseFloat(v);
+            if (videoTrack && videoTrack.getCapabilities()?.zoom) {
+                videoTrack.applyConstraints({ advanced: [{ zoom: currentZoom }] });
+            } else { document.getElementById('video').style.transform = `scale(${currentZoom})`; }
+            saveConfig();
+        }
+
+        async function selectFolder() {
+            try { dirHandle = await window.showDirectoryPicker(); document.getElementById('folder-path').innerText = `Directorio: ${dirHandle.name}`; } catch (e) {}
+        }
+        function clearFolder() { dirHandle = null; document.getElementById('folder-path').innerText = "No vinculado"; }
+
+        function generateExifBlock(lat, lon, az, dateObj) {
+            const pad = (v) => v.toString().padStart(2, '0');
+            const dateStr = `${dateObj.getFullYear()}:${pad(dateObj.getMonth() + 1)}:${pad(dateObj.getDate())} ${pad(dateObj.getHours())}:${pad(dateObj.getMinutes())}:${pad(dateObj.getSeconds())}\0`;
+            
+            const buffer = new ArrayBuffer(512); const dv = new DataView(buffer);
+            dv.setUint16(0, 0x4949, true); dv.setUint16(2, 42, true); dv.setUint32(4, 8, true); 
+            
+            dv.setUint16(8, 3, true); 
+            let p = 10;
+            
+            const offsetFechaIFD0 = 150;
+            const offsetSubIFD = 180;
+            const offsetGPS = 250;
+            
+            dv.setUint16(p, 0x0132, true); dv.setUint16(p + 2, 2, true); dv.setUint32(p + 4, 20, true); dv.setUint32(p + 8, offsetFechaIFD0, true); p += 12;
+            dv.setUint16(p, 0x8769, true); dv.setUint16(p + 2, 4, true); dv.setUint32(p + 4, 1, true); dv.setUint32(p + 8, offsetSubIFD, true); p += 12;
+            dv.setUint16(p, 0x8825, true); dv.setUint16(p + 2, 4, true); dv.setUint32(p + 4, 1, true); dv.setUint32(p + 8, offsetGPS, true); p += 12;
+            dv.setUint32(p, 0, true); 
+            
+            for(let i=0; i<20; i++) { dv.setUint8(offsetFechaIFD0 + i, dateStr.charCodeAt(i)); }
+            
+            dv.setUint16(offsetSubIFD, 1, true); 
+            dv.setUint16(offsetSubIFD + 2, 0x9003, true); 
+            dv.setUint16(offsetSubIFD + 4, 2, true); 
+            dv.setUint32(offsetSubIFD + 6, 20, true); 
+            dv.setUint32(offsetSubIFD + 10, offsetFechaIFD0, true); 
+            dv.setUint32(offsetSubIFD + 14, 0, true);
+            
+            let gpsP = offsetGPS; dv.setUint16(gpsP, 7, true); gpsP += 2;
+            const baseDataOffset = offsetGPS + 2 + (7 * 12) + 4;
+            const writeGPSEntry = (tag, type, count, val) => {
+                dv.setUint16(gpsP, tag, true); dv.setUint16(gpsP + 2, type, true); dv.setUint32(gpsP + 4, count, true); dv.setUint32(gpsP + 8, val, true); gpsP += 12;
+            };
+            const degToRat = (val) => {
+                const a = Math.abs(val); const d = Math.floor(a); const m = Math.floor((a - d) * 60); const s = Math.round(((a - d) * 60 - m) * 60 * 100);
+                return [[d, 1], [m, 1], [s, 100]];
+            };
+            writeGPSEntry(0x00, 1, 4, 0x00000302); writeGPSEntry(0x01, 2, 2, (lat >= 0 ? 78 : 83)); writeGPSEntry(0x02, 5, 3, baseDataOffset);
+            writeGPSEntry(0x03, 2, 2, (lon >= 0 ? 69 : 87)); writeGPSEntry(0x04, 5, 3, baseDataOffset + 24);
+            writeGPSEntry(0x10, 2, 2, 84); writeGPSEntry(0x11, 5, 1, baseDataOffset + 48);
+            dv.setUint32(gpsP, 0, true);
+            
+            let dp = baseDataOffset;
+            degToRat(lat).forEach(r => { dv.setUint32(dp, r[0], true); dv.setUint32(dp+4, r[1], true); dp += 8; });
+            degToRat(lon).forEach(r => { dv.setUint32(dp, r[0], true); dv.setUint32(dp+4, r[1], true); dp += 8; });
+            dv.setUint32(dp, Math.round((az || 0) * 100), true); dv.setUint32(dp + 4, 100, true);
+
+            return new Uint8Array(buffer, 0, baseDataOffset + 56);
+        }
+
+        async function takePhoto() {
+            if (!isCameraPowered) return;
+            const btn = document.getElementById('shutter-btn');
+            if (btn.disabled) return; btn.disabled = true;
+
+            // Salvaguarda: si por lo que sea el proceso se queda "colgado"
+            // (esperando algo que nunca llega, en vez de fallar con un error
+            // que podamos atrapar), esto libera el botón igualmente a los
+            // 6 segundos, para que nunca se quede bloqueado de forma permanente.
+            let terminado = false;
+            const watchdog = setTimeout(() => {
+                if (!terminado) {
+                    console.warn('takePhoto: watchdog forzó la reactivación del botón (proceso colgado más de 6s)');
+                    mostrarErrorEnPantalla('La foto tardó demasiado y se ha reactivado el botón. Repite la foto.');
+                    btn.disabled = false;
+                }
+            }, 6000);
+
+            try {
+                await tomarFotoInterna(btn);
+            } catch (err) {
+                console.error('Error al tomar la foto:', err);
+                mostrarErrorEnPantalla(`Error al hacer foto: ${err.message || err}`);
+                btn.disabled = false;
+            } finally {
+                terminado = true;
+                clearTimeout(watchdog);
+            }
+        }
+
+        // Muestra un mensaje de error visible unos segundos, para poder
+        // diagnosticar fallos de campo sin acceso a la consola del navegador.
+        function mostrarErrorEnPantalla(mensaje) {
+            let el = document.getElementById('error-toast');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'error-toast';
+                el.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#b91c1c;color:white;padding:10px 16px;border-radius:8px;font-size:13px;z-index:999;max-width:90%;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,0.4);';
+                document.body.appendChild(el);
+            }
+            el.innerText = mensaje;
+            el.style.display = 'block';
+            clearTimeout(el._hideTimeout);
+            el._hideTimeout = setTimeout(() => { el.style.display = 'none'; }, 8000);
+        }
+
+        async function tomarFotoInterna(btn) {
+            const video = document.getElementById('video'); const canvas = document.getElementById('canvas-export'); const flash = document.getElementById('flash-effect');
+            flash.classList.add('flash-active'); setTimeout(() => flash.classList.remove('flash-active'), 300);
+
+            const settings = videoTrack.getSettings();
+            const w = settings.width || video.videoWidth; const h = settings.height || video.videoHeight;
+            canvas.width = w; canvas.height = h; const ctx = canvas.getContext('2d', { alpha: false });
+
+            if (!(videoTrack && videoTrack.getCapabilities()?.zoom) && currentZoom > 1) {
+                const sW = w / currentZoom; const sH = h / currentZoom; const sX = (w - sW) / 2; const sY = (h - sH) / 2;
+                ctx.drawImage(video, sX, sY, sW, sH, 0, 0, w, h);
+            } else { ctx.drawImage(video, 0, 0, w, h); }
+
+            const scale = h / 1080; const fontSize = parseInt(document.getElementById('cfg-text-size').value) * scale;
+            ctx.fillStyle = document.getElementById('cfg-text-color').value; ctx.font = `bold ${fontSize}px monospace`;
+            ctx.textAlign = "right"; ctx.shadowColor = "black"; ctx.shadowBlur = 5 * scale;
+
+            const dateStr = document.getElementById('wm-date').innerText; const geoStr = document.getElementById('wm-geo').innerText; const extraStr = document.getElementById('wm-extra').innerText;
+            const margin = 50 * scale;
+            ctx.fillText(dateStr, w - margin, h - (margin + fontSize * 2.5)); ctx.fillText(geoStr, w - margin, h - (margin + fontSize * 1.2)); ctx.fillText(extraStr, w - margin, h - margin);
+
+            if (document.getElementById('cfg-show-map').checked) {
+                const mapPerc = parseInt(document.getElementById('cfg-map-size-slider').value) / 100; const mapSize = w * mapPerc; const mX = margin, mY = h - mapSize - margin;
+                ctx.fillStyle = "black"; ctx.fillRect(mX, mY, mapSize, mapSize);
+                const tiles = document.querySelectorAll('#mini-map .leaflet-tile'); const mapRect = document.getElementById('mini-map').getBoundingClientRect();
+                ctx.save(); ctx.beginPath(); ctx.rect(mX, mY, mapSize, mapSize); ctx.clip();
+                tiles.forEach(tile => {
+                    // Si no hay datos móviles, las teselas del mapa (OSM/Esri) pueden
+                    // no haber cargado y quedar en estado "broken". drawImage() lanza
+                    // una excepción con una imagen rota, así que las descartamos aquí.
+                    if (!tile.complete || tile.naturalWidth === 0) return;
+                    const r = tile.getBoundingClientRect();
+                    const dx = mX + ((r.left - mapRect.left) * (mapSize / mapRect.width)); const dy = mY + ((r.top - mapRect.top) * (mapSize / mapRect.height));
+                    const dw = r.width * (mapSize / mapRect.width); const dh = r.height * (mapSize / mapRect.height);
+                    if (dx+dw > mX && dx < mX+mapSize && dy+dh > mY && dy < mY+mapSize) { ctx.drawImage(tile, dx, dy, dw, dh); }
+                });
+                const centerX = mX + (mapSize / 2); const centerY = mY + (mapSize / 2); const dotSize = 8 * scale;
+                ctx.fillStyle = "#ff0000"; ctx.strokeStyle = "white"; ctx.lineWidth = 2 * scale;
+                ctx.beginPath(); ctx.arc(centerX, centerY, dotSize, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                if (document.getElementById('cfg-show-heading').checked) {
+                    ctx.save(); ctx.translate(centerX, centerY); ctx.rotate((lastHeading * Math.PI) / 180);
+                    const arrowSize = 25 * scale; ctx.fillStyle = "#ff0000"; ctx.beginPath(); ctx.moveTo(0, -arrowSize); ctx.lineTo(-8 * scale, 0); ctx.lineTo(8 * scale, 0); ctx.closePath(); ctx.fill(); ctx.restore();
+                }
+                ctx.restore(); ctx.strokeStyle = "white"; ctx.lineWidth = 3 * scale; ctx.strokeRect(mX, mY, mapSize, mapSize);
+            }
+
+            await new Promise((resolve, reject) => {
+                canvas.toBlob(async (blob) => {
+                    try {
+                        const fechaCapturaExacta = new Date();
+                        const exif = generateExifBlock(lastLat, lastLon, lastHeading, fechaCapturaExacta); const original = new Uint8Array(await blob.arrayBuffer());
+                        const exifHeader = [0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; const app1Len = 2 + exifHeader.length + exif.length;
+                        const final = new Uint8Array(2 + 2 + app1Len + (original.length - 2));
+                        final.set([0xFF, 0xD8], 0); final.set([0xFF, 0xE1], 2); final.set([(app1Len >> 8) & 0xFF, app1Len & 0xFF], 4);
+                        final.set(exifHeader, 6); final.set(exif, 12); final.set(original.subarray(2), 12 + exif.length);
+                        const pad = (v) => v.toString().padStart(2, '0');
+                        const fileName = `IMG_${pad(fechaCapturaExacta.getDate())}${pad(fechaCapturaExacta.getMonth()+1)}${fechaCapturaExacta.getFullYear()}_${pad(fechaCapturaExacta.getHours())}${pad(fechaCapturaExacta.getMinutes())}${pad(fechaCapturaExacta.getSeconds())}.jpg`;
+                        if (dirHandle) {
+                            const file = await dirHandle.getFileHandle(fileName, { create: true }); const writer = await file.createWritable();
+                            await writer.write(new Blob([final])); await writer.close();
+                        } else {
+                            const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([final])); a.download = fileName; a.click();
+                        }
+                        resolve();
+                    } catch (err) {
+                        reject(err);
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }, 'image/jpeg', 1.0);
+            });
+        }
+
+        function getUTM(lat, lon) {
+            const zone = Math.floor((lon + 180) / 6) + 1; const a = 6378137, f = 1/298.257, k0 = 0.9996; const b = a*(1-f), e2 = (a*a-b*b)/(a*a);
+            const latRad = lat*Math.PI/180, lon0 = ((zone-1)*6-180+3)*Math.PI/180;
+            const N = a/Math.sqrt(1-e2*Math.sin(latRad)**2), T = Math.tan(latRad)**2, C = (e2/(1-e2))*Math.cos(latRad)**2, A = (lon*Math.PI/180-lon0)*Math.cos(latRad);
+            const M = a*((1-e2/4-3*e2*e2/64)*latRad-(3*e2/8+3*e2*e2/32)*Math.sin(2*latRad));
+            const east = k0*N*(A+(1-T+C)*A**3/6)+500000; const north = k0*(M+Math.tan(latRad)*(A**2/2));
+            return { e: Math.round(east), n: Math.round(lat<0?north+10000000:north), z: zone+(lat>=0?'N':'S') };
+        }
+
+        function updateClock() {
+            const now = new Date(); const pad = (n) => n.toString().padStart(2, '0');
+            document.getElementById('wm-date').innerText = `${pad(now.getDate())}/${pad(now.getMonth()+1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        }
+
+        window.onload = async () => {
+            loadConfig();
+            await listCameras();
+            await initCamera();
+            initMap();
+            initSensors();
+            activarGpsInterno();
+            setInterval(updateClock, 1000);
+            updateUI();
+        };
+    </script>
+</body>
+</html>
