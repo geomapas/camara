@@ -79,7 +79,6 @@
                     <span class="text-sm font-bold text-orange-400">Invertir Azimut (180°)</span>
                     <input type="checkbox" id="cfg-invert-heading" onchange="saveConfig(); updateOrientationVisuals();">
                 </div>
-                <div class="text-xs text-slate-400 italic">Capa fija: Satélite</div>
                 <div>
                     <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>TAMAÑO MAPA</span><span id="val-map-size">20%</span></div>
                     <input type="range" id="cfg-map-size-slider" min="5" max="25" value="20" oninput="saveConfig(); updateUI();" class="w-full">
@@ -104,15 +103,10 @@
                 </div>
                 <div id="serial-config" class="space-y-2 hidden">
                     <div class="space-y-1">
-                        <span class="text-xs text-slate-400">VELOCIDAD (BAUDIOS)</span>
-                        <div id="cfg-serial-baud" data-value="9600" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white font-mono">9600</div>
+                        <span class="text-xs text-slate-400">ALIAS DEL PUERTO</span>
+                        <input type="text" id="cfg-serial-alias" placeholder="Ej: GPS Trimble" maxlength="24" oninput="saveConfig(); updateGpsAliasDisplay();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
                     </div>
                     <button onclick="elegirPuertoSerial()" class="w-full bg-blue-600 p-2 rounded-lg font-bold text-sm text-white">SELECCIONAR PUERTO COM</button>
-                    <div class="space-y-1">
-                        <span class="text-xs text-slate-400">ALIAS DEL PUERTO (ej. "COM7 - GPS Bluetooth")</span>
-                        <input id="cfg-serial-alias" type="text" placeholder="Escribe aquí el número COM que ves en Windows" oninput="onSerialAliasChange()" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white font-mono">
-                        <p class="text-[10px] text-slate-500 italic">Chrome oculta el número COM real por seguridad. Escríbelo tú una vez y se recordará.</p>
-                    </div>
                     <div id="serial-status" class="text-[11px] text-slate-400 italic font-mono">Sin puerto vinculado</div>
                 </div>
             </div>
@@ -175,7 +169,7 @@
         <div class="flex flex-col items-center gap-1 mt-2 w-full px-2 text-center">
             <span class="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Estado GPS</span>
             <div id="gps-status" class="text-[10px] font-bold text-orange-400 uppercase mt-0.5">BUSCANDO...</div>
-            <div id="gps-port-info" class="text-[9px] font-mono text-cyan-300 mt-0.5 hidden text-center break-all px-1"></div>
+            <div id="gps-port-alias" class="text-[9px] text-slate-500 font-mono mt-0.5"></div>
             <div id="compass-val" class="text-sm font-mono text-white mt-1">---°</div>
         </div>
 
@@ -314,7 +308,6 @@
                 textSize: document.getElementById('cfg-text-size').value,
                 lastZoom: currentZoom,
                 gpsSource: (document.querySelector('input[name="cfg-gps-source"]:checked') || {}).value || 'geolocation',
-                serialBaud: 9600,
                 serialAlias: document.getElementById('cfg-serial-alias').value
             };
             localStorage.setItem('geocam_config', JSON.stringify(config));
@@ -341,12 +334,52 @@
         }
 
         let serialPort = null, serialReader = null, serialBuffer = "", serialActivo = false;
-        let serialAutoReconnectTimer = null, serialListenersInstalados = false, serialReconectando = false;
+        const SERIAL_BAUD_FIJO = 9600;
 
         function setGpsStatus(txt, colorClass) {
             const el = document.getElementById('gps-status');
             el.innerText = txt;
             el.className = "text-[10px] font-bold uppercase mt-0.5 " + colorClass;
+        }
+
+        // Muestra el alias del puerto (definido por el usuario) bajo el
+        // estado GPS, solo mientras el origen sea serie y esté conectado,
+        // para saber a simple vista a qué equipo/COM estamos vinculados.
+        function updateGpsAliasDisplay() {
+            const el = document.getElementById('gps-port-alias');
+            if (!el) return;
+            const alias = document.getElementById('cfg-serial-alias').value.trim();
+            if (getGpsSource() === 'serial' && serialActivo && alias) {
+                el.innerText = alias;
+            } else {
+                el.innerText = "";
+            }
+        }
+
+        // Guarda un identificador del puerto USB (vendor/product id) para
+        // poder localizar el mismo puerto físico en próximas sesiones, ya
+        // que los objetos SerialPort no son serializables directamente.
+        function guardarPuertoRecordado(port) {
+            try {
+                const info = port.getInfo ? port.getInfo() : {};
+                localStorage.setItem('geocam_serial_port_info', JSON.stringify({
+                    usbVendorId: info.usbVendorId,
+                    usbProductId: info.usbProductId
+                }));
+            } catch (e) { console.error("No se pudo guardar el identificador del puerto:", e); }
+        }
+
+        function buscarPuertoRecordado(ports) {
+            try {
+                const saved = localStorage.getItem('geocam_serial_port_info');
+                if (!saved) return null;
+                const info = JSON.parse(saved);
+                if (info.usbVendorId === undefined) return null;
+                return ports.find(p => {
+                    const i = p.getInfo ? p.getInfo() : {};
+                    return i.usbVendorId === info.usbVendorId && i.usbProductId === info.usbProductId;
+                }) || null;
+            } catch (e) { return null; }
         }
 
         function getGpsSource() {
@@ -373,8 +406,7 @@
         }
 
         function activarGpsGeolocation() {
-            const badge = document.getElementById('gps-port-info');
-            if (badge) { badge.classList.add('hidden'); badge.innerText = ""; }
+            updateGpsAliasDisplay();
             if (!("geolocation" in navigator)) {
                 setGpsStatus("SIN GPS", "text-red-500");
                 return;
@@ -395,160 +427,27 @@
             );
         }
 
-        function describirPuerto(port) {
-            const aliasEl = document.getElementById('cfg-serial-alias');
-            const alias = aliasEl && aliasEl.value ? aliasEl.value.trim() : "";
-            let tecnico = "—";
-            if (port) {
-                try {
-                    const info = port.getInfo ? port.getInfo() : {};
-                    const vid = info.usbVendorId != null ? "0x" + info.usbVendorId.toString(16).padStart(4, '0').toUpperCase() : null;
-                    const pid = info.usbProductId != null ? "0x" + info.usbProductId.toString(16).padStart(4, '0').toUpperCase() : null;
-                    if (vid && pid) tecnico = `USB VID:${vid} PID:${pid}`;
-                    else if (vid) tecnico = `USB VID:${vid}`;
-                    else tecnico = "Bluetooth/Serie";
-                } catch (e) { tecnico = "Puerto COM"; }
-            }
-            if (alias) return `${alias} (${tecnico})`;
-            return tecnico;
-        }
-
-        function describirPuertoCacheado() {
-            const aliasEl = document.getElementById('cfg-serial-alias');
-            const alias = aliasEl && aliasEl.value ? aliasEl.value.trim() : "";
-            let saved = null;
-            try { saved = JSON.parse(localStorage.getItem('geocam_last_port') || 'null'); } catch (e) {}
-            let tecnico = "Puerto COM recordado";
-            if (saved) {
-                const vid = saved.usbVendorId != null ? "0x" + saved.usbVendorId.toString(16).padStart(4, '0').toUpperCase() : null;
-                const pid = saved.usbProductId != null ? "0x" + saved.usbProductId.toString(16).padStart(4, '0').toUpperCase() : null;
-                if (vid && pid) tecnico = `USB VID:${vid} PID:${pid}`;
-                else if (vid) tecnico = `USB VID:${vid}`;
-                else if (saved.alias) tecnico = "Bluetooth/Serie";
-            }
-            const nombre = alias || (saved && saved.alias) || "último puerto COM";
-            return nombre ? `${nombre} (${tecnico})` : tecnico;
-        }
-
-        function onSerialAliasChange() {
-            saveConfig();
-            // Refresca los indicadores con el nuevo alias sin reconectar
-            if (serialPort) {
-                const desc = describirPuerto(serialPort);
-                const baud = 9600;
-                if (serialActivo) {
-                    setSerialStatus(`Conectado a ${desc} @ ${baud} baudios`, `📍 ${desc} @ ${baud}`);
-                } else {
-                    setSerialStatus(`Puerto vinculado (pendiente de datos): ${desc}`, `📍 ${desc}`);
-                }
-            }
-        }
-
-        function setSerialStatus(txt, portInfo) {
-            const el = document.getElementById('serial-status');
-            if (el) el.innerText = txt;
-            const badge = document.getElementById('gps-port-info');
-            if (badge) {
-                if (portInfo) {
-                    badge.innerText = portInfo;
-                    badge.classList.remove('hidden');
-                } else {
-                    badge.innerText = "";
-                    badge.classList.add('hidden');
-                }
-            }
-        }
-
-        function guardarUltimoPuerto(port) {
-            try {
-                const info = port.getInfo ? port.getInfo() : {};
-                const aliasEl = document.getElementById('cfg-serial-alias');
-                localStorage.setItem('geocam_last_port', JSON.stringify({
-                    usbVendorId: info.usbVendorId ?? null,
-                    usbProductId: info.usbProductId ?? null,
-                    alias: aliasEl && aliasEl.value ? aliasEl.value.trim() : "",
-                    savedAt: Date.now()
-                }));
-            } catch (e) { /* noop */ }
-        }
-
-        function elegirPuertoPreferido(ports) {
-            if (!ports || ports.length === 0) return null;
-            let saved = null;
-            try { saved = JSON.parse(localStorage.getItem('geocam_last_port') || 'null'); } catch (e) {}
-            if (saved && (saved.usbVendorId != null || saved.usbProductId != null)) {
-                const match = ports.find(p => {
-                    const i = p.getInfo ? p.getInfo() : {};
-                    return (i.usbVendorId ?? null) === saved.usbVendorId &&
-                           (i.usbProductId ?? null) === saved.usbProductId;
-                });
-                if (match) return match;
-            }
-            return ports[0];
-        }
-
-        function instalarAutoReconectorSerial() {
-            if (!('serial' in navigator) || serialListenersInstalados) return;
-            serialListenersInstalados = true;
-            navigator.serial.addEventListener('connect', () => {
-                if (getGpsSource() === 'serial' && !serialActivo) activarGpsSerial();
-            });
-            navigator.serial.addEventListener('disconnect', () => {
-                if (getGpsSource() === 'serial') {
-                    setGpsStatus("SERIE DESCONECTADO", "text-orange-400");
-                    setSerialStatus(`Puerto desconectado. Esperando de nuevo: ${describirPuertoCacheado()}`, `📍 ${describirPuertoCacheado()}`);
-                    vigilarPuertoSerialDisponible();
-                }
-            });
-        }
-
-        function vigilarPuertoSerialDisponible() {
-            if (!('serial' in navigator) || serialAutoReconnectTimer) return;
-            serialAutoReconnectTimer = setInterval(async () => {
-                if (getGpsSource() !== 'serial' || serialActivo || serialReconectando) return;
-                try {
-                    const ports = await navigator.serial.getPorts();
-                    if (ports.length > 0) {
-                        clearInterval(serialAutoReconnectTimer);
-                        serialAutoReconnectTimer = null;
-                        await activarGpsSerial();
-                    }
-                } catch (e) {}
-            }, 2000);
-        }
-
         async function activarGpsSerial() {
             if (!('serial' in navigator)) {
                 setGpsStatus("SIN WEB SERIAL", "text-red-500");
                 document.getElementById('serial-status').innerText = "Web Serial no soportado en este navegador";
                 return;
             }
-            if (serialReconectando || serialActivo) return;
-            serialReconectando = true;
-            instalarAutoReconectorSerial();
-            // Intento silencioso: reusar el último puerto previamente autorizado
+            // Intento silencioso: reusar el puerto previamente autorizado y
+            // recordado (por vendor/product id), o si no coincide con
+            // ninguno, el primero disponible que ya tuviera permiso.
             try {
                 const ports = await navigator.serial.getPorts();
                 if (ports.length > 0) {
-                    serialPort = elegirPuertoPreferido(ports);
-                    const desc = describirPuerto(serialPort);
-                    setSerialStatus(`Reconectando al último puerto usado: ${desc}`, `📍 ${desc}`);
+                    serialPort = buscarPuertoRecordado(ports) || ports[0];
                     await abrirSerialYLeer();
                     return;
                 }
                 setGpsStatus("SIN PUERTO", "text-orange-400");
-                if (localStorage.getItem('geocam_last_port') || (document.getElementById('cfg-serial-alias') || {}).value) {
-                    const desc = describirPuertoCacheado();
-                    setSerialStatus(`Último puerto recordado: ${desc}. El navegador no lo tiene autorizado ahora; pulsa 'Seleccionar puerto COM' una vez para restaurar el permiso.`, `📍 ${desc}`);
-                } else {
-                    setSerialStatus("Pulsa 'Seleccionar puerto COM' para vincular uno (solo la primera vez)", null);
-                }
-                vigilarPuertoSerialDisponible();
+                document.getElementById('serial-status').innerText = "Pulsa 'Seleccionar puerto COM' para vincular uno";
             } catch (e) {
                 console.error("Error accediendo a puertos serie:", e);
                 setGpsStatus("ERROR SERIE", "text-red-500");
-            } finally {
-                serialReconectando = false;
             }
         }
 
@@ -558,9 +457,9 @@
                 return;
             }
             try {
-                await desactivarGpsSerial();
+                desactivarGpsSerial();
                 serialPort = await navigator.serial.requestPort();
-                guardarUltimoPuerto(serialPort);
+                guardarPuertoRecordado(serialPort);
                 await abrirSerialYLeer();
             } catch (e) {
                 console.error("Selección de puerto cancelada o fallida:", e);
@@ -569,23 +468,21 @@
 
         async function abrirSerialYLeer() {
             if (!serialPort) return;
-            const baud = 9600;
-            const desc = describirPuerto(serialPort);
             try {
-                await serialPort.open({ baudRate: baud });
+                await serialPort.open({ baudRate: SERIAL_BAUD_FIJO });
                 setGpsStatus("SERIE CONECTADO", "text-orange-400");
-                setSerialStatus(`Conectado a ${desc} @ ${baud} baudios`, `📍 ${desc} @ ${baud}`);
+                document.getElementById('serial-status').innerText = `Conectado a ${SERIAL_BAUD_FIJO} baudios`;
                 serialActivo = true;
-                guardarUltimoPuerto(serialPort);
+                updateGpsAliasDisplay();
                 leerSerialLoop();
             } catch (e) {
                 console.error("No se pudo abrir el puerto serie:", e);
                 setGpsStatus("ERROR SERIE", "text-red-500");
-                setSerialStatus(`Error al abrir ${desc}: ` + (e.message || e) + ". Pulsa 'Seleccionar puerto COM' para reintentar.", null);
+                document.getElementById('serial-status').innerText = "Error al abrir: " + (e.message || e);
                 serialPort = null;
+                updateGpsAliasDisplay();
             }
         }
-
 
         async function leerSerialLoop() {
             const decoder = new TextDecoderStream();
@@ -623,13 +520,7 @@
                 try { await serialPort.close(); } catch (e) {}
             }
             serialBuffer = "";
-        }
-
-        async function reconectarSerialSiActivo() {
-            if (getGpsSource() === 'serial') {
-                await desactivarGpsSerial();
-                await activarGpsSerial();
-            }
+            updateGpsAliasDisplay();
         }
 
         function onGpsSourceChange() {
@@ -637,6 +528,7 @@
             const src = getGpsSource();
             document.getElementById('serial-config').classList.toggle('hidden', src !== 'serial');
             activarGpsInterno();
+            updateGpsAliasDisplay();
         }
 
         // Parser mínimo NMEA: soporta $GxRMC y $GxGGA
@@ -834,7 +726,6 @@
             if (map) {
                 map.setZoom(mapZoom);
                 setTimeout(() => map.invalidateSize(), 100);
-                tileLayer.setUrl('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
             }
         }
 
