@@ -79,10 +79,7 @@
                     <span class="text-sm font-bold text-orange-400">Invertir Azimut (180°)</span>
                     <input type="checkbox" id="cfg-invert-heading" onchange="saveConfig(); updateOrientationVisuals();">
                 </div>
-                <select id="cfg-map-type" onchange="saveConfig(); updateUI();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
-                    <option value="street">Mapa Vial (Standard)</option>
-                    <option value="satellite">Satélite (Híbrido)</option>
-                </select>
+                <div class="text-xs text-slate-400 italic">Capa fija: Satélite</div>
                 <div>
                     <div class="flex justify-between text-[10px] text-slate-400 mb-1"><span>TAMAÑO MAPA</span><span id="val-map-size">20%</span></div>
                     <input type="range" id="cfg-map-size-slider" min="5" max="25" value="20" oninput="saveConfig(); updateUI();" class="w-full">
@@ -312,7 +309,6 @@
                 showMap: document.getElementById('cfg-show-map').checked,
                 showHeading: document.getElementById('cfg-show-heading').checked,
                 invertHeading: document.getElementById('cfg-invert-heading').checked,
-                mapType: document.getElementById('cfg-map-type').value,
                 mapSize: document.getElementById('cfg-map-size-slider').value,
                 mapZoom: document.getElementById('cfg-map-zoom').value,
                 textColor: document.getElementById('cfg-text-color').value,
@@ -332,7 +328,6 @@
             if (config.showMap !== undefined) document.getElementById('cfg-show-map').checked = config.showMap;
             if (config.showHeading !== undefined) document.getElementById('cfg-show-heading').checked = config.showHeading;
             if (config.invertHeading !== undefined) document.getElementById('cfg-invert-heading').checked = config.invertHeading;
-            if (config.mapType) document.getElementById('cfg-map-type').value = config.mapType;
             if (config.mapSize) document.getElementById('cfg-map-size-slider').value = config.mapSize;
             if (config.mapZoom) document.getElementById('cfg-map-zoom').value = config.mapZoom;
             if (config.textColor) document.getElementById('cfg-text-color').value = config.textColor;
@@ -616,7 +611,7 @@
 
         function initMap() {
             map = L.map('mini-map', { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false }).setView([0,0], 16);
-            tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { crossOrigin: true }).addTo(map);
+            tileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { crossOrigin: true }).addTo(map);
         }
 
         // Calcula el azimut real hacia donde apunta la parte TRASERA del dispositivo
@@ -682,7 +677,6 @@
             const showHeading = document.getElementById('cfg-show-heading').checked;
             const mapSize = document.getElementById('cfg-map-size-slider').value;
             const mapZoom = document.getElementById('cfg-map-zoom').value;
-            const mapType = document.getElementById('cfg-map-type').value;
             const color = document.getElementById('cfg-text-color').value;
             const size = document.getElementById('cfg-text-size').value;
 
@@ -698,7 +692,7 @@
             if (map) {
                 map.setZoom(mapZoom);
                 setTimeout(() => map.invalidateSize(), 100);
-                tileLayer.setUrl(mapType === 'satellite' ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png');
+                tileLayer.setUrl('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}');
             }
         }
 
