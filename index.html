@@ -427,6 +427,9 @@
             );
         }
 
+        let serialReintentos = 0;
+        const SERIAL_MAX_REINTENTOS = 6;
+
         async function activarGpsSerial() {
             if (!('serial' in navigator)) {
                 setGpsStatus("SIN WEB SERIAL", "text-red-500");
@@ -448,7 +451,22 @@
             } catch (e) {
                 console.error("Error accediendo a puertos serie:", e);
                 setGpsStatus("ERROR SERIE", "text-red-500");
+                programarReintentoSerial();
             }
+        }
+
+        // Reintenta la conexión automática al puerto serie unas cuantas
+        // veces en segundo plano. Es habitual que un receptor GPS Bluetooth
+        // tarde unos segundos en quedar disponible como puerto COM tras
+        // arrancar la tablet o volver de segundo plano, así que un único
+        // intento fallido no debe darse por vencido.
+        function programarReintentoSerial() {
+            if (getGpsSource() !== 'serial' || serialActivo) return;
+            if (serialReintentos >= SERIAL_MAX_REINTENTOS) return;
+            serialReintentos++;
+            setTimeout(() => {
+                if (getGpsSource() === 'serial' && !serialActivo) activarGpsSerial();
+            }, 3000);
         }
 
         async function elegirPuertoSerial() {
@@ -460,6 +478,7 @@
                 desactivarGpsSerial();
                 serialPort = await navigator.serial.requestPort();
                 guardarPuertoRecordado(serialPort);
+                serialReintentos = 0;
                 await abrirSerialYLeer();
             } catch (e) {
                 console.error("Selección de puerto cancelada o fallida:", e);
@@ -473,6 +492,7 @@
                 setGpsStatus("SERIE CONECTADO", "text-orange-400");
                 document.getElementById('serial-status').innerText = `Conectado a ${SERIAL_BAUD_FIJO} baudios`;
                 serialActivo = true;
+                serialReintentos = 0;
                 updateGpsAliasDisplay();
                 leerSerialLoop();
             } catch (e) {
@@ -481,6 +501,7 @@
                 document.getElementById('serial-status').innerText = "Error al abrir: " + (e.message || e);
                 serialPort = null;
                 updateGpsAliasDisplay();
+                programarReintentoSerial();
             }
         }
 
@@ -525,6 +546,7 @@
 
         function onGpsSourceChange() {
             saveConfig();
+            serialReintentos = 0;
             const src = getGpsSource();
             document.getElementById('serial-config').classList.toggle('hidden', src !== 'serial');
             activarGpsInterno();
@@ -630,10 +652,10 @@
                     if (videoTrack) { videoTrack.stop(); videoTrack = null; }
                     document.getElementById('video').srcObject = null;
                 }
-                desactivarGpsInterno();
+                pausarGpsAlOcultar();
             } else {
                 appEstaVisible = true;
-                activarGpsInterno();
+                reanudarGpsAlMostrar();
                 if (lastLat !== 0 && map) {
                     map.setView([lastLat, lastLon]);
                 }
@@ -642,6 +664,34 @@
                 }
             }
         });
+
+        // Al minimizar/ocultar la app: si el GPS es por puerto serie
+        // (normalmente un receptor Bluetooth/USB), lo dejamos conectado y
+        // leyendo en segundo plano -- apenas consume batería y así evitamos
+        // tener que volver a vincular el mismo COM al recuperar la app. Si
+        // el origen es la ubicación de Windows, sí la pausamos como antes
+        // para ahorrar batería.
+        function pausarGpsAlOcultar() {
+            if (getGpsSource() === 'serial') {
+                return;
+            }
+            if (watchGpsInternoId !== null) {
+                navigator.geolocation.clearWatch(watchGpsInternoId);
+                watchGpsInternoId = null;
+            }
+            setGpsStatus("GPS PAUSADO", "text-slate-500");
+        }
+
+        // Al recuperar la app: si el GPS serie seguía activo (no se tocó al
+        // ocultar), lo dejamos tal cual; si por lo que sea se había caído,
+        // se intenta reconectar. La ubicación de Windows se reactiva siempre.
+        function reanudarGpsAlMostrar() {
+            if (getGpsSource() === 'serial') {
+                if (!serialActivo) { serialReintentos = 0; activarGpsSerial(); }
+                return;
+            }
+            activarGpsGeolocation();
+        }
 
         function initMap() {
             map = L.map('mini-map', { zoomControl: false, attributionControl: false, dragging: false, touchZoom: false }).setView([0,0], 16);
