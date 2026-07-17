@@ -105,14 +105,7 @@
                 <div id="serial-config" class="space-y-2 hidden">
                     <div class="space-y-1">
                         <span class="text-xs text-slate-400">VELOCIDAD (BAUDIOS)</span>
-                        <select id="cfg-serial-baud" onchange="saveConfig(); reconectarSerialSiActivo();" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white">
-                            <option value="4800">4800</option>
-                            <option value="9600" selected>9600</option>
-                            <option value="19200">19200</option>
-                            <option value="38400">38400</option>
-                            <option value="57600">57600</option>
-                            <option value="115200">115200</option>
-                        </select>
+                        <div id="cfg-serial-baud" data-value="9600" class="w-full bg-slate-800 p-2 rounded border border-slate-700 text-sm text-white font-mono">9600</div>
                     </div>
                     <button onclick="elegirPuertoSerial()" class="w-full bg-blue-600 p-2 rounded-lg font-bold text-sm text-white">SELECCIONAR PUERTO COM</button>
                     <div class="space-y-1">
@@ -321,7 +314,7 @@
                 textSize: document.getElementById('cfg-text-size').value,
                 lastZoom: currentZoom,
                 gpsSource: (document.querySelector('input[name="cfg-gps-source"]:checked') || {}).value || 'geolocation',
-                serialBaud: document.getElementById('cfg-serial-baud').value,
+                serialBaud: 9600,
                 serialAlias: document.getElementById('cfg-serial-alias').value
             };
             localStorage.setItem('geocam_config', JSON.stringify(config));
@@ -340,7 +333,6 @@
             if (config.textColor) document.getElementById('cfg-text-color').value = config.textColor;
             if (config.textSize) document.getElementById('cfg-text-size').value = config.textSize;
             if (config.lastZoom) { currentZoom = config.lastZoom; document.getElementById('cam-zoom').value = currentZoom; }
-            if (config.serialBaud) document.getElementById('cfg-serial-baud').value = config.serialBaud;
             if (config.serialAlias) document.getElementById('cfg-serial-alias').value = config.serialAlias;
             const src = config.gpsSource === 'serial' ? 'serial' : 'geolocation';
             const radio = document.querySelector('input[name="cfg-gps-source"][value="' + src + '"]');
@@ -443,7 +435,7 @@
             // Refresca los indicadores con el nuevo alias sin reconectar
             if (serialPort) {
                 const desc = describirPuerto(serialPort);
-                const baud = document.getElementById('cfg-serial-baud').value;
+                const baud = 9600;
                 if (serialActivo) {
                     setSerialStatus(`Conectado a ${desc} @ ${baud} baudios`, `📍 ${desc} @ ${baud}`);
                 } else {
@@ -577,7 +569,7 @@
 
         async function abrirSerialYLeer() {
             if (!serialPort) return;
-            const baud = parseInt(document.getElementById('cfg-serial-baud').value) || 9600;
+            const baud = 9600;
             const desc = describirPuerto(serialPort);
             try {
                 await serialPort.open({ baudRate: baud });
