@@ -449,24 +449,49 @@
             }
         }
 
+        function guardarUltimoPuerto(port) {
+            try {
+                const info = port.getInfo ? port.getInfo() : {};
+                localStorage.setItem('geocam_last_port', JSON.stringify({
+                    usbVendorId: info.usbVendorId ?? null,
+                    usbProductId: info.usbProductId ?? null
+                }));
+            } catch (e) { /* noop */ }
+        }
+
+        function elegirPuertoPreferido(ports) {
+            if (!ports || ports.length === 0) return null;
+            let saved = null;
+            try { saved = JSON.parse(localStorage.getItem('geocam_last_port') || 'null'); } catch (e) {}
+            if (saved) {
+                const match = ports.find(p => {
+                    const i = p.getInfo ? p.getInfo() : {};
+                    return (i.usbVendorId ?? null) === saved.usbVendorId &&
+                           (i.usbProductId ?? null) === saved.usbProductId;
+                });
+                if (match) return match;
+            }
+            return ports[0];
+        }
+
         async function activarGpsSerial() {
             if (!('serial' in navigator)) {
                 setGpsStatus("SIN WEB SERIAL", "text-red-500");
                 document.getElementById('serial-status').innerText = "Web Serial no soportado en este navegador";
                 return;
             }
-            // Intento silencioso: reusar un puerto previamente autorizado
+            // Intento silencioso: reusar el último puerto previamente autorizado
             try {
                 const ports = await navigator.serial.getPorts();
                 if (ports.length > 0) {
-                    serialPort = ports[0];
+                    serialPort = elegirPuertoPreferido(ports);
                     const desc = describirPuerto(serialPort);
-                    setSerialStatus(`Puerto vinculado (pendiente de datos): ${desc}`, `📍 ${desc}`);
+                    setSerialStatus(`Reconectando al último puerto usado: ${desc}`, `📍 ${desc}`);
                     await abrirSerialYLeer();
                     return;
                 }
                 setGpsStatus("SIN PUERTO", "text-orange-400");
-                setSerialStatus("Pulsa 'Seleccionar puerto COM' para vincular uno", null);
+                setSerialStatus("Pulsa 'Seleccionar puerto COM' para vincular uno (solo la primera vez)", null);
             } catch (e) {
                 console.error("Error accediendo a puertos serie:", e);
                 setGpsStatus("ERROR SERIE", "text-red-500");
@@ -481,6 +506,7 @@
             try {
                 await desactivarGpsSerial();
                 serialPort = await navigator.serial.requestPort();
+                guardarUltimoPuerto(serialPort);
                 await abrirSerialYLeer();
             } catch (e) {
                 console.error("Selección de puerto cancelada o fallida:", e);
@@ -496,11 +522,12 @@
                 setGpsStatus("SERIE CONECTADO", "text-orange-400");
                 setSerialStatus(`Conectado a ${desc} @ ${baud} baudios`, `📍 ${desc} @ ${baud}`);
                 serialActivo = true;
+                guardarUltimoPuerto(serialPort);
                 leerSerialLoop();
             } catch (e) {
                 console.error("No se pudo abrir el puerto serie:", e);
                 setGpsStatus("ERROR SERIE", "text-red-500");
-                setSerialStatus(`Error al abrir ${desc}: ` + (e.message || e), null);
+                setSerialStatus(`Error al abrir ${desc}: ` + (e.message || e) + ". Pulsa 'Seleccionar puerto COM' para reintentar.", null);
                 serialPort = null;
             }
         }
