@@ -1,4 +1,4 @@
-const CACHE_NAME = 'geocam v2.3.1'; // <-- Recuerda cambiar este número cada vez que subas cambios
+const CACHE_NAME = 'geocam v2.3.2'; // <-- Recuerda cambiar este número cada vez que subas cambios
 
 const ASSETS = [
   './',
