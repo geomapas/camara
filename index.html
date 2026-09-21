@@ -191,7 +191,8 @@
     <canvas id="canvas-export" style="display:none"></canvas>
 
     <script>
-        const MAX_FILE_SIZE_BYTES = 1.2 * 1024 * 1024; // Límite interno fijado en 1.2 MB
+        // Límite interno estricto: 1.0 MB
+        const MAX_FILE_SIZE_BYTES = 1.0 * 1024 * 1024;
 
         function mostrarVersionSW() {
             fetch('./sw.js', { cache: 'no-store' })
@@ -847,10 +848,10 @@
             let rawW = settings.width || video.videoWidth; 
             let rawH = settings.height || video.videoHeight;
 
-            // Reescalado adaptativo: si el sensor nativo sobrepasa los 2560px, reducimos la cuadrícula base
+            // Reescalado adaptativo previo: para 1.0 MB, si el sensor pasa de 2048px reducimos el canvas base
             let targetW = rawW;
             let targetH = rawH;
-            const maxDimension = 2560;
+            const maxDimension = 2048;
             if (targetW > maxDimension || targetH > maxDimension) {
                 const ratio = Math.min(maxDimension / targetW, maxDimension / targetH);
                 targetW = Math.round(targetW * ratio);
@@ -942,11 +943,11 @@
                 ctx.strokeRect(mX, mY, mapSize, mapSize);
             }
 
-            // Compresión automática para garantizar tamaño máximo de 1.2 MB
-            let q = 0.90;
+            // Compresión automática estricta para garantizar tamaño máximo de 1.0 MB
+            let q = 0.88;
             let blob = await canvasToBlobAsync(canvas, 'image/jpeg', q);
-            while (blob.size > MAX_FILE_SIZE_BYTES && q > 0.4) {
-                q -= 0.10;
+            while (blob.size > MAX_FILE_SIZE_BYTES && q > 0.35) {
+                q -= 0.08;
                 blob = await canvasToBlobAsync(canvas, 'image/jpeg', q);
             }
 
